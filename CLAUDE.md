@@ -1,0 +1,548 @@
+@AGENTS.md
+
+# UniSync — Engineering Guide
+
+> Living technical documentation and project memory.
+> Update this file **in the same change** as any meaningful architectural or
+> implementation decision. A decision that is not written down here has not
+> been made.
+
+**Last updated:** 2026-09-23 — development environment initialization.
+
+---
+
+## Project Overview
+
+UniSync is a multi-tenant SaaS web application that gives a small organization
+one place to run its administrative operations: customers/patients,
+appointments, billing, reminders and follow-ups, and inventory.
+
+The problem it solves: small organizations run their back office across a
+patchwork of paper, spreadsheets, a phone, and a calendar. Information is
+duplicated, follow-ups get missed, and one or two people absorb the
+coordination cost. Consolidating these operations removes the duplication; an
+AI administrative agent on top of the consolidated data removes much of the
+remaining manual effort.
+
+## Product Vision
+
+Reduce administrative workload for small organizations through a single
+centralized platform plus an AI administrative agent that acts on the user's
+behalf.
+
+The agent is a first-class part of the product, not a bolt-on chat box. The
+target experience is that an administrator can say what they want in plain
+language — "book Mr. Rao for a cleaning next Tuesday afternoon and remind him
+the day before" — and the agent carries it out through the same controlled
+application services a human user would drive, with the same permission checks
+and the same audit trail.
+
+## Current Target Organization
+
+The first implementation is modeled around a **dental clinic**: patients,
+appointments with chairs/practitioners, treatment billing, recall reminders,
+and consumable inventory.
+
+Dental clinic is a *starting shape*, not a hard-coded assumption.
+`Organization.type` is an enum (`DENTAL_CLINIC`, `OTHER`) from day one so other
+verticals can be added without reshaping the tenancy layer. Vertical-specific
+concepts belong behind that type, never assumed globally.
+
+---
+
+## Core Modules
+
+Status legend: **Not started** · **Scaffolded** · **In progress** · **Done**
+
+### 1. Patients
+
+- **Purpose** — System of record for the people the organization serves.
+- **Main entities** *(planned)* — `Patient`, `PatientContact`,
+  `MedicalHistoryEntry`, `PatientDocument` (Supabase Storage).
+- **Important workflows** *(planned)* — register a patient; search and
+  deduplicate; maintain contact and medical history; attach documents (x-rays,
+  consent forms); merge duplicate records.
+- **Current status** — **Not started.**
+- **Future** — patient-facing portal, consent capture, document OCR.
+
+### 2. Appointments
+
+- **Purpose** — Scheduling of patient visits against finite resources
+  (practitioners, chairs, rooms).
+- **Main entities** *(planned)* — `Appointment`, `Practitioner`, `Resource`,
+  `AvailabilityRule`.
+- **Important workflows** *(planned)* — find available slots; book;
+  reschedule; cancel; no-show handling; day and week calendar views.
+- **Current status** — **Not started.**
+- **Future** — online self-booking, waitlist auto-fill on cancellation.
+
+### 3. Billing & Payments
+
+- **Purpose** — Turn delivered treatment into invoices and track payment.
+- **Main entities** *(planned)* — `Invoice`, `InvoiceLine`, `Payment`,
+  `ServiceCatalogItem`, `TaxRate`.
+- **Important workflows** *(planned)* — generate an invoice from an
+  appointment; record part payments; outstanding-balance reporting; refunds.
+- **Current status** — **Not started.**
+- **Future** — payment-gateway integration, insurance claims.
+
+### 4. Reminders & Follow-ups
+
+- **Purpose** — Make sure nothing that needs a nudge is forgotten.
+- **Main entities** *(planned)* — `ReminderRule`, `ScheduledReminder`,
+  `NotificationLog`.
+- **Important workflows** *(planned)* — appointment reminders; recall
+  follow-ups; overdue-payment nudges; delivery logging.
+- **Current status** — **Not started.**
+- **Future** — WhatsApp / SMS / email channels, per-organization quiet hours.
+
+### 5. Inventory Management
+
+- **Purpose** — Track consumables and materials so the clinic does not run out.
+- **Main entities** *(planned)* — `InventoryItem`, `StockBatch`,
+  `StockMovement`, `Supplier`, `PurchaseOrder`.
+- **Important workflows** *(planned)* — stock in and out; low-stock alerts;
+  expiry tracking; reorder.
+- **Current status** — **Not started.**
+- **Future** — supplier catalogues, automatic reorder suggestions.
+
+### 6. AI Agent
+
+- **Purpose** — Administrative assistant with organization context, operating
+  through controlled tools. See [AI Agent Architecture](#ai-agent-architecture).
+- **Main entities** — `AuditLog` (implemented); `AiConversation`,
+  `AiMessage` *(planned)*.
+- **Current status** — **Scaffolded.** The provider abstraction
+  (`LlmProvider`), the Gemini implementation, and the tool contract exist.
+  **Zero tools are registered**, and there is no agent loop or UI yet.
+- **Future** — streaming responses, multi-step tool execution with
+  confirmation, conversation history, per-organization instructions.
+
+---
+
+## Technology Stack
+
+| Area | Choice | Why |
+| --- | --- | --- |
+| Framework | **Next.js 16** (App Router, Turbopack) | One deployable unit for UI and server logic. Server Components keep data access on the server by default, which suits a permission-sensitive app. |
+| UI | **React 19**, **TypeScript 5** | Team standard; strict typing is a stated project principle. |
+| Styling | **Tailwind CSS v4** | Utility-first, no separate config file in v4, no runtime cost. |
+| Components | **shadcn/ui** (`radix-nova` preset, Radix primitives, Lucide icons) | Source is copied into `components/ui/`, so components are ours to modify. Radix gives accessible behaviour without a heavyweight design system. **Chakra UI is explicitly not used.** |
+| Database | **PostgreSQL** via **Supabase** | Relational data with real constraints and transactions; a clinic's data is highly relational. Supabase provides managed Postgres, auth, and storage from one vendor. |
+| ORM | **Prisma 7** | Typed schema as the single source of truth; the generated client removes a whole class of query bug; first-class migrations. |
+| Auth | **Supabase Auth** (`@supabase/ssr`) | Same vendor as the database; cookie-based SSR sessions integrate cleanly with Server Components. |
+| Storage | **Supabase Storage** | Same vendor, same auth tokens, RLS-aware buckets. |
+| AI | **Google Gemini** (`@google/genai`) behind an `LlmProvider` interface | Native function calling. The interface means swapping providers is a change in `lib/ai/` only. |
+| Validation | **Zod 4** | One schema mechanism for environment variables, form input, and AI tool arguments. |
+| Hosting | **Vercel** (app) + **Supabase** (data) | Zero-config Next.js deploys; managed Postgres. |
+
+Deliberately **not** added: no separate Express backend, no state-management
+library, no component library beyond shadcn/ui, no test framework yet.
+
+---
+
+## Architecture
+
+```text
+Browser (React Server + Client Components)
+    │
+    ▼
+Next.js (App Router)
+    │  proxy.ts .................. refreshes the Supabase session per request
+    │  Server Components ......... read data directly, server-side
+    │  Server Actions ............ mutations from forms
+    │  Route Handlers ............ /api/* for webhooks and the AI endpoint
+    ▼
+Server-side business logic  (lib/, plus services/<module> as modules land)
+    │  lib/auth/session.ts ....... WHO is calling, in WHICH organization
+    │  lib/auth/permissions.ts ... MAY they do this
+    ▼
+AI Agent  (lib/ai/)
+    │  provider.ts ............... resolves the active LlmProvider
+    │  gemini.ts ................. the only file importing the Gemini SDK
+    │  tools.ts .................. tool contract + registry
+    ▼
+Application tools  (validated, permission-checked, audited)
+    ▼
+Database  (lib/db/prisma.ts — the only PrismaClient in the codebase)
+    ▼
+PostgreSQL (Supabase)
+```
+
+The essential property: **the AI agent sits at the same level as a human
+user.** It calls the same application tools, through the same permission
+checks, and its actions land in the same audit log. It has no privileged path
+to the database.
+
+**Authentication** — Supabase Auth owns credentials and sessions. `proxy.ts`
+refreshes the token on each request; `lib/auth/session.ts` verifies it with
+`getUser()`, never `getSession()` (which only decodes the cookie without
+verifying it).
+
+**Authorization** — enforced server-side only, at the point data is read or
+written. Route-level gating is deliberately *not* the security boundary, so a
+missing matcher entry can never become a hole.
+
+**Storage** — Supabase Storage, buckets scoped per organization. Not yet
+configured.
+
+**Notifications** — no provider integrated. `NotificationLog` is planned so
+delivery is auditable from the start.
+
+**External integrations** — none yet.
+
+---
+
+## Database Design
+
+Schema: `prisma/schema.prisma`. Generated client: `lib/db/generated/`
+(gitignored; produced by `npm run db:generate`).
+
+### Implemented — tenancy foundation only
+
+| Model | Purpose |
+| --- | --- |
+| `Organization` | The tenant. `id`, `name`, `slug` (unique), `type`, `timezone`. Every business record will hang off this. |
+| `Profile` | Application-side mirror of a Supabase Auth user, keyed by the same UUID (`auth.users.id`). Holds email, name, avatar. **Never stores passwords.** |
+| `Membership` | Join between `Profile` and `Organization`, carrying `role` and `status`. Unique on `(organizationId, profileId)`. A user may belong to several organizations. |
+| `AuditLog` | Append-only record of meaningful actions, including every AI tool call — `actorType`, `actorProfileId`, `action`, `entityType`, `entityId`, `metadata`, `aiToolName`. |
+
+Enums: `OrganizationType`, `MembershipRole`, `MembershipStatus`, `ActorType`.
+
+```text
+Organization 1──* Membership *──1 Profile
+Organization 1──* AuditLog   *──? Profile   (actor; null when actorType = SYSTEM)
+```
+
+### Not yet modelled
+
+Patients, appointments, billing, reminders, inventory. These arrive with their
+modules, each carrying a non-null `organizationId`.
+
+### Conventions
+
+- UUID primary keys (`@db.Uuid`) — avoids leaking row counts and makes
+  cross-environment data movement safe.
+- `snake_case` table names via `@@map`; `camelCase` in TypeScript.
+- **Every tenant-scoped table carries `organizationId`** and is indexed on it.
+- `organizationId` always comes from the server-resolved session context, never
+  from request input.
+
+### Migrations
+
+No migration has been run yet — the database is not connected. Once
+`DIRECT_URL` is set, the first migration creates the four tables above.
+
+---
+
+## AI Agent Architecture
+
+**Provider** — Google Gemini via `@google/genai`, behind the `LlmProvider`
+interface in `lib/ai/types.ts`. `lib/ai/gemini.ts` is the *only* file that
+imports the SDK. `lib/ai/provider.ts` resolves the active provider.
+
+**Responsibilities** — understand a request in the context of the current
+organization; choose the right tool; ask for missing details; request
+confirmation for high-impact actions; report what it did.
+
+**Available tools** — **none registered yet.** `AI_TOOL_REGISTRY` in
+`lib/ai/tools.ts` is intentionally empty. Tools are added alongside the module
+whose service layer they call.
+
+**Tool contract** — every tool declares:
+
+| Field | Meaning |
+| --- | --- |
+| `definition` | Name, description, and JSON-Schema-style parameters. **This is all the model ever receives.** |
+| `permission` | A `Permission` checked against the caller's role *before* execution. |
+| `input` | A Zod schema. Model-produced arguments are parsed, never trusted. |
+| `confirmation` | `{ required: true, describe }` for destructive or high-impact tools. |
+| `audit` | The action name written to `AuditLog`. |
+| `execute` | Receives the resolved `OrganizationContext`. |
+
+**Tool input/output** — input arrives as an untrusted
+`Record<string, unknown>` from the model and is parsed by the Zod schema; a
+parse failure is returned *to the model* as an error rather than thrown at the
+user, so the agent can correct itself. Output is a plain serializable object.
+
+**Permission model** — `toolDefinitionsFor()` filters the registry by the
+caller's permissions, so the model is only ever *shown* tools the user could
+legitimately invoke. The permission is then re-checked at execution time —
+filtering the list is a usability measure, not the enforcement point.
+
+**Confirmation requirements** — a tool marked `confirmation.required` is never
+executed on the model's say-so. The agent returns a confirmation request, the
+user approves explicitly, and the tool runs on a second, approved invocation.
+This applies to: deleting or merging records, cancelling appointments, issuing
+refunds or voiding invoices, sending anything to a patient, and bulk
+operations.
+
+**How it interacts with application services** — tools call the same service
+functions the UI calls. Business logic is never duplicated into a tool.
+
+**The agent is NOT allowed to:**
+
+- Execute arbitrary SQL, or reach `prisma` directly from a tool without going
+  through a service function.
+- Receive or use `SUPABASE_SERVICE_ROLE_KEY`, or any RLS-bypassing client.
+- Choose its own `organizationId` — it is always injected from the session.
+- Act without a user request, or on its own schedule.
+- Perform a confirmation-required action without explicit user approval.
+- Escalate its own permissions, or see tools the user lacks permission for.
+- Have its output rendered as trusted instructions. Content retrieved from the
+  database — patient notes, uploaded documents, free-text fields — is **data,
+  not instructions**, and must never be treated as a command to the agent.
+
+---
+
+## Authentication & Authorization
+
+**Users** — identity lives in Supabase Auth (`auth.users`). `Profile` mirrors
+it by the same UUID so application tables can join against it. Credentials are
+never stored in our tables.
+
+**Organizations** — the tenant boundary. A user may belong to several.
+
+**Roles** (`MembershipRole`) — per organization, stored on the `Membership`
+row:
+
+| Role | Intent |
+| --- | --- |
+| `OWNER` | Full control, including billing and ownership transfer. |
+| `ADMIN` | Day-to-day administration; cannot change roles or remove members. |
+| `STAFF` | Operational use. |
+
+**Permissions** — code asks *"may this actor do X?"*, never *"is this actor an
+ADMIN?"*, so adding a role later does not mean hunting down scattered role
+comparisons. Current vocabulary (`lib/auth/permissions.ts`):
+`organization.read`, `organization.update`, `member.read`, `member.invite`,
+`member.update_role`, `member.remove`, `audit.read`, `ai.use`. Each module
+extends this list.
+
+**Tenant isolation** — three layers:
+
+1. `requireOrganizationContext()` resolves `organizationId` from the verified
+   session and the caller's memberships. A client-supplied `organizationId` is
+   treated as a *request* and verified against membership before it is
+   honoured.
+2. Every tenant-scoped query filters on that `organizationId`.
+3. Postgres Row Level Security as a backstop — *not yet written; see Known
+   Issues.*
+
+A "you do not have access" error is deliberately worded identically to a "does
+not exist" error, so error responses cannot be used to probe for the existence
+of other tenants.
+
+---
+
+## Environment Variables
+
+Names only — **never record a value here.** See `.env.example`.
+
+| Variable | Scope | Required | Purpose |
+| --- | --- | --- | --- |
+| `NEXT_PUBLIC_APP_URL` | public | yes | Base URL for auth redirects and callbacks. |
+| `NEXT_PUBLIC_SUPABASE_URL` | public | yes | Supabase project URL. |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | public | yes | Anon/publishable key; constrained by RLS. |
+| `SUPABASE_SERVICE_ROLE_KEY` | **secret** | no | Bypasses RLS. Administrative tasks only. Never exposed to the agent. |
+| `DATABASE_URL` | **secret** | yes | Pooled connection, port 6543, `?pgbouncer=true&connection_limit=1`. Runtime queries. |
+| `DIRECT_URL` | **secret** | yes | Direct connection, port 5432. Migrations only. |
+| `GEMINI_API_KEY` | **secret** | yes | Gemini API key. Server-side only. |
+| `GEMINI_MODEL` | config | no | Default model (`gemini-2.5-flash`). |
+
+Rules: anything named `NEXT_PUBLIC_*` is compiled into the browser bundle and
+is therefore public — never give a secret such a name. Secrets live in
+`.env.local` (gitignored) locally, and in Vercel's encrypted environment
+variables in production. All access goes through `lib/env.ts`, which validates
+lazily and refuses to evaluate server variables in a browser context.
+
+---
+
+## Development Commands
+
+```bash
+npm install          # install dependencies (runs prisma generate afterwards)
+npm run dev          # start the dev server on http://localhost:3000
+npm run build        # production build
+npm start            # serve the production build
+npm run lint         # ESLint
+npm run lint:fix     # ESLint with autofix
+npm run typecheck    # tsc --noEmit
+```
+
+Prisma:
+
+```bash
+npm run db:generate  # regenerate the client into lib/db/generated
+npm run db:push      # push schema to the database without a migration (dev only)
+npm run db:migrate   # create and apply a migration
+npm run db:studio    # browse data
+```
+
+Tests: **no test framework is installed yet.** See Future Improvements.
+
+---
+
+## Implementation Status
+
+- [x] **Development environment** — Next.js, strict TypeScript, Tailwind v4,
+      shadcn/ui, Prisma 7, Supabase clients, Gemini abstraction, Git;
+      lint, typecheck, and build all passing.
+- [ ] **Credentials configured** — `.env.local` is scaffolded but empty;
+      Supabase and Gemini values are still required.
+- [ ] **Authentication** — sign-up, sign-in, sign-out, `(auth)` routes, and
+      `Profile` provisioning on first login.
+- [ ] **Organization setup** — create an organization, invite members, switch
+      the active organization, first migration applied.
+- [ ] **Patient module**
+- [ ] **Appointment module**
+- [ ] **Billing module**
+- [ ] **Reminder system**
+- [ ] **Inventory module**
+- [ ] **AI agent** — conversation loop, confirmation flow, chat UI.
+- [ ] **AI tools** — registry populated per module.
+- [ ] **Notifications** — email / SMS / WhatsApp provider.
+- [ ] **Analytics** — dashboards and reporting.
+- [ ] **Testing** — framework, unit tests for permissions and tools, E2E.
+- [ ] **Production deployment** — Vercel project, production Supabase, RLS
+      policies, backups.
+
+---
+
+## Architectural Decisions
+
+Chronological. Append; do not rewrite history.
+
+### 2026-09-23 — Next.js as the full-stack framework, no separate backend
+
+One deployable unit means no cross-service auth handshake and no duplicated
+types. Server Components make server-side data access the default rather than
+something to remember. A separate Express service would add an
+authentication-propagation problem for no benefit at this size; it can be
+extracted later if a genuinely separate workload appears.
+
+### 2026-09-23 — PostgreSQL, via Supabase
+
+Clinic data is highly relational (patient → appointment → invoice → payment)
+and correctness matters more than write throughput. Postgres gives real foreign
+keys, transactions, and `CHECK` constraints. Supabase adds managed hosting,
+auth, and storage from a single vendor, keeping the operational surface small
+for a small team.
+
+### 2026-09-23 — Prisma as the ORM
+
+The schema becomes the single source of truth, and the generated client makes
+whole categories of query bug unrepresentable. Its migration workflow gives
+reviewable, version-controlled schema changes. The typed client is also what
+lets AI tools stay thin wrappers over service functions instead of
+hand-written SQL.
+
+### 2026-09-23 — The AI works through tools, never direct database access
+
+The decisive reason: **an LLM's output is a suggestion, not an
+authorization.** If the model could compose SQL, then prompt-injected text in
+a patient note or an uploaded document would become an execution path into the
+database, and every permission check would be one clever sentence away from
+being bypassed.
+
+Routing every action through a declared tool means the attack surface is the
+finite set of operations we deliberately exposed. Each tool validates its
+arguments with Zod, checks a permission against the caller's real role, takes
+`organizationId` from the server session rather than from the model, and writes
+an audit record. The model receives only tool *declarations* — never a function
+reference, a database handle, or a connection string.
+
+### 2026-09-23 — Lazy environment validation instead of module-load parsing
+
+Eager `env.parse()` at import time is the common pattern, but it makes
+`next build` fail on any machine or CI runner without credentials — including
+during this very initialization. `lib/env.ts` validates on first *use* and
+memoises, so the app builds and boots, and a missing variable produces a
+precise error in the one code path that actually needs it.
+
+### 2026-09-23 — Prisma 7 driver adapter, with split pooled and direct URLs
+
+Prisma 7 removed connection URLs from the schema and requires an explicit
+driver adapter. Runtime queries use the **pooled** Supabase connection
+(Supavisor, port 6543) via `PrismaPg`, because serverless functions open many
+short-lived connections and would exhaust Postgres' direct connection limit.
+Migrations use the **direct** connection (port 5432) configured in
+`prisma.config.ts`, because the pooler cannot reliably run DDL or hold advisory
+locks.
+
+Prisma 7 also stopped loading dotenv implicitly, so `prisma.config.ts` calls
+`process.loadEnvFile('.env.local')` — keeping **one** local secret file for
+both the application and the CLI instead of duplicating credentials into a
+second `.env`. The `datasource` block is declared conditionally so that
+`prisma generate` still works before any credentials exist.
+
+### 2026-09-23 — Lazy Prisma client construction behind a Proxy
+
+`export const prisma = new PrismaClient()` reads `DATABASE_URL` at import time,
+which broke `next build` for routes that never query the database. The client
+is now constructed on first property access and cached on `globalThis` so hot
+reloads do not accumulate connection pools.
+
+### 2026-09-23 — shadcn/ui with Radix primitives, not the Base UI preset
+
+The shadcn CLI now defaults to a Base UI preset. We chose `-b radix` because
+the Radix-based components are the long-established, most heavily documented
+variant, and the surrounding ecosystem assumes them. Component source lives in
+`components/ui/` and is ours to edit.
+
+### 2026-09-23 — `proxy.ts` refreshes the session but does not gate routes
+
+Next.js 16 renamed the `middleware.ts` convention to `proxy.ts`. Ours refreshes
+the Supabase session and nothing else. Authorization lives where data is read,
+so a forgotten matcher pattern cannot silently expose a route.
+
+---
+
+## Known Issues
+
+1. **No credentials configured.** `.env.local` exists with empty values.
+   Supabase, the database, and Gemini are all unverified; `/api/health` reports
+   `setup_incomplete`. No migration has been run.
+2. **No Row Level Security policies.** Tenant isolation currently rests on the
+   application layer alone. RLS must be written before production — it is the
+   backstop for an application-layer mistake.
+3. **`npm audit` reports 4 high-severity advisories** in `deepmerge-ts` and
+   `mysql2`, both transitive dependencies of the **Prisma CLI** (dev-only).
+   `mysql2` is never loaded on a PostgreSQL datasource. The only offered fix is
+   a downgrade to Prisma 6, which would be a larger regression. Revisit when
+   Prisma 7.x updates the dependency.
+4. **No tests.** Nothing is guarded by automated checks beyond lint, typecheck,
+   and build.
+5. **`Profile` rows are not provisioned yet.** A Supabase Auth signup does not
+   currently create a `Profile`, so `requireOrganizationContext()` would find
+   no membership. The authentication module handles this.
+6. **`/api/health` is unauthenticated.** It exposes only booleans, but it
+   should be restricted before production.
+7. **Prisma 8.0 is in release candidate.** We are on stable 7.10.0
+   deliberately.
+8. **The `(auth)` and `(dashboard)` route groups do not exist yet.** They are
+   created with the authentication module rather than as empty folders — Git
+   cannot track an empty directory, and placeholder pages would be deleted at
+   the next step.
+
+---
+
+## Future Improvements
+
+Intentionally not implemented yet:
+
+- **Testing** — Vitest for unit tests (the permission matrix and tool argument
+  validation are the highest-value targets), Playwright for E2E.
+- **Row Level Security** — per-organization policies as defence in depth.
+- **Organization switching UI** — the data model supports multiple memberships;
+  there is no switcher.
+- **AI conversation persistence** — `AiConversation` / `AiMessage` tables.
+- **Streaming AI responses** — the provider interface returns a whole result; a
+  `generateStream` method would sit alongside it.
+- **Background jobs** — reminders need a scheduler (Vercel Cron or Supabase
+  Edge Functions).
+- **Rate limiting** — on the AI endpoint especially, since tokens cost money.
+- **Soft deletes** — clinical records generally should not be hard-deleted.
+- **Internationalization** and per-organization timezone handling (the
+  `timezone` column exists but nothing reads it yet).
+- **Observability** — structured logging and error tracking.

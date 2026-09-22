@@ -1,0 +1,142 @@
+// UniSync — Prisma schema
+//
+// Scope at this stage: multi-tenant foundation only.
+// Clinic domain models (patients, appointments, billing, reminders, inventory)
+// are intentionally NOT defined yet. See CLAUDE.md → Database Design.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/db/generated"
+}
+
+// Prisma 7 no longer accepts connection URLs in the schema.
+//   - Migrations / introspection : URL comes from `prisma.config.ts` (DIRECT_URL).
+//   - Application runtime        : URL comes from the driver adapter in
+//                                  `lib/db/prisma.ts` (pooled DATABASE_URL).
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// The kind of small organization a tenant represents. The platform is built
+/// dental-clinic-first, but the type is modelled explicitly so other verticals
+/// can be added without reshaping the tenancy layer.
+enum OrganizationType {
+  DENTAL_CLINIC
+  OTHER
+}
+
+/// Role of a user within one organization. Permissions are derived from the
+/// role on the server; the client is never trusted with this decision.
+enum MembershipRole {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+}
+
+/// Who or what initiated an audited action.
+enum ActorType {
+  USER
+  AI_AGENT
+  SYSTEM
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy & identity
+// ---------------------------------------------------------------------------
+
+/// A tenant. Every business record in the platform will hang off an
+/// Organization, and every query is scoped by organizationId on the server.
+model Organization {
+  id        String           @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String           @unique
+  type      OrganizationType @default(DENTAL_CLINIC)
+  timezone  String           @default("UTC")
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  memberships Membership[]
+  auditLogs   AuditLog[]
+
+  @@map("organizations")
+}
+
+/// Application-side mirror of a Supabase Auth user.
+///
+/// Supabase Auth owns credentials and sessions in the `auth.users` table.
+/// This model holds the profile data the application needs to join against,
+/// keyed by the same UUID. It never stores passwords.
+model Profile {
+  id        String   @id @db.Uuid // == auth.users.id from Supabase Auth
+  email     String   @unique
+  fullName  String?
+  avatarUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships Membership[]
+  auditLogs   AuditLog[]
+
+  @@map("profiles")
+}
+
+/// Join between a Profile and an Organization, carrying the role.
+/// A user may belong to several organizations; exactly one is "active" per
+/// request, resolved server-side.
+model Membership {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  profileId      String           @db.Uuid
+  role           MembershipRole   @default(STAFF)
+  status         MembershipStatus @default(ACTIVE)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  profile      Profile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, profileId])
+  @@index([profileId])
+  @@map("memberships")
+}
+
+// ---------------------------------------------------------------------------
+// Auditing
+// ---------------------------------------------------------------------------
+
+/// Append-only record of meaningful actions, including everything the AI agent
+/// performs through a tool. Written by the service layer, never by the model.
+model AuditLog {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  actorType      ActorType @default(USER)
+  /// Null when the actor is SYSTEM.
+  actorProfileId String?   @db.Uuid
+  /// Dot-namespaced verb, e.g. "patient.create", "appointment.cancel".
+  action         String
+  /// Entity kind the action targeted, e.g. "Patient".
+  entityType     String?
+  entityId       String?
+  /// Structured, non-sensitive detail about the change.
+  metadata       Json?
+  /// Set when the action was carried out by an AI tool call.
+  aiToolName     String?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actorProfile Profile?     @relation(fields: [actorProfileId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, entityType, entityId])
+  @@map("audit_logs")
+}
