@@ -737,6 +737,26 @@ the agent loops on arguments that can never parse and simply appears stupid.
 Unions, `.refine`, `.transform` and `z.date()` are unrepresentable by design;
 constraints go in `.describe()` prose, which the registry requires on every field.
 
+### 2026-09-23 — `next-themes` removed; the theme is a prop
+
+React 19 warns on every render that `next-themes` injects a `<script>` inside a
+component. The library was there only so the shadcn Toaster could call
+`useTheme()` — and UniSync ships light-first with `enableSystem` off and no theme
+switcher, so that call had exactly one possible answer.
+
+Keeping it meant a client provider wrapped around the entire tree, a dependency
+in the critical path, and a permanent console error, all to answer a question
+that is not being asked. The Toaster now takes `theme` as a prop defaulting to
+`"light"`.
+
+`suppressHydrationWarning` came off `<html>` at the same time: it existed because
+next-themes mutated the element before hydration, and leaving it would have
+masked genuine mismatches for the rest of the project's life.
+
+Dark mode is unaffected as a future option — the `.dark` token block and the
+`dark` custom variant are intact, so enabling it means putting the class on
+`<html>` and passing `theme="dark"`.
+
 ### 2026-09-23 — `Membership` may be scoped by `profileId` instead of tenant
 
 The tenant tripwire rejected `Membership.findFirst({ where: { profileId } })`,
