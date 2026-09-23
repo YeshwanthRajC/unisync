@@ -54,6 +54,30 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   "AIToolExecution",
 ]);
 
+/**
+ * Models that may instead be constrained by a different column, and which.
+ *
+ * `Membership` is the one table whose job is to ANSWER the question "which
+ * organizations does this person belong to?". Requiring an organizationId on it
+ * is impossible by definition: resolving the caller's organization is what the
+ * query is for, so the filter would have to be the answer it is looking up.
+ *
+ * `profileId` is a legitimate scope for it — narrower than a tenant, in fact,
+ * since it restricts the result to one person's rows. Like `organizationId`, the
+ * value must come from the verified session; the tripwire cannot check
+ * provenance for either, because it is a backstop against a FORGOTTEN filter,
+ * not against a maliciously chosen value. That remains the job of
+ * `lib/auth/session.ts`, which takes the profileId from `getUser()`.
+ *
+ * This is deliberately a narrow, per-model allowance rather than a general
+ * escape hatch such as `crossTenant(() => ...)`. A general one would be reached
+ * for whenever the guard was inconvenient, which is precisely when it is doing
+ * its job.
+ */
+const ALTERNATIVE_SCOPE_KEYS: Readonly<Record<string, string>> = {
+  Membership: "profileId",
+};
+
 /** Operations whose `where` must constrain the tenant. */
 const WHERE_SCOPED_OPERATIONS: ReadonlySet<string> = new Set([
   "findFirst",
@@ -108,22 +132,39 @@ export class TenantScopeError extends Error {
  * `organizationId` inside an `OR` does not constrain the result set to one
  * tenant, so accepting it would make the check worse than useless.
  */
-function constrainsTenant(where: unknown, depth = 0): boolean {
+function constrainsBy(
+  where: unknown,
+  keys: readonly string[],
+  depth = 0,
+): boolean {
   if (depth > 4 || where === null || typeof where !== "object") return false;
 
   const filter = where as Record<string, unknown>;
 
-  if (filter.organizationId !== undefined) return true;
+  if (keys.some((key) => filter[key] !== undefined)) return true;
 
   const and = filter.AND;
   if (Array.isArray(and)) {
-    return and.some((clause) => constrainsTenant(clause, depth + 1));
+    return and.some((clause) => constrainsBy(clause, keys, depth + 1));
   }
-  if (and !== undefined) return constrainsTenant(and, depth + 1);
+  if (and !== undefined) return constrainsBy(and, keys, depth + 1);
 
   return false;
 }
 
+/** The columns that count as scoping a query on this model. */
+function scopeKeysFor(model: string): readonly string[] {
+  const alternative = ALTERNATIVE_SCOPE_KEYS[model];
+  return alternative ? ["organizationId", alternative] : ["organizationId"];
+}
+
+/**
+ * Writes are always required to carry `organizationId`, with no alternative.
+ *
+ * A row has to be filed under a tenant when it is created, even for Membership:
+ * "which organization is this membership in?" is never ambiguous at write time,
+ * only at read time.
+ */
 function dataCarriesTenant(data: unknown): boolean {
   if (data === null || typeof data !== "object") return false;
 
@@ -161,12 +202,14 @@ export function tenantTripwire() {
 
           const input = (args ?? {}) as Record<string, unknown>;
 
+          const scopeKeys = scopeKeysFor(model);
+
           if (WHERE_SCOPED_OPERATIONS.has(operation)) {
-            if (!constrainsTenant(input.where)) {
+            if (!constrainsBy(input.where, scopeKeys)) {
               throw new TenantScopeError(
                 model,
                 operation,
-                "was called without organizationId in its where clause",
+                `was called without ${scopeKeys.join(" or ")} in its where clause`,
               );
             }
           }
@@ -182,11 +225,11 @@ export function tenantTripwire() {
           }
 
           if (operation === "upsert") {
-            if (!constrainsTenant(input.where)) {
+            if (!constrainsBy(input.where, scopeKeys)) {
               throw new TenantScopeError(
                 model,
                 operation,
-                "was called without organizationId in its where clause",
+                `was called without ${scopeKeys.join(" or ")} in its where clause`,
               );
             }
             if (!dataCarriesTenant(input.create)) {

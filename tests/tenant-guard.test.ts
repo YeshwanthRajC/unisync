@@ -50,6 +50,57 @@ describe("tenant tripwire", () => {
     await expect(prisma.membership.count()).rejects.toThrow(TenantScopeError);
   });
 
+  /*
+   * Membership is the one table whose job is to answer "which organizations does
+   * this person belong to?", so requiring an organizationId on it is impossible
+   * by definition — the filter would have to be the answer being looked up.
+   *
+   * These two queries are the real ones from lib/auth/session.ts and
+   * services/organizations/queries.ts. The guard rejected both, which broke
+   * sign-in and onboarding. Pinned here so the allowance cannot be removed
+   * without a failing test explaining why it exists.
+   */
+  it("accepts a Membership query scoped by profileId instead", async () => {
+    await expect(
+      prisma.membership.findMany({
+        where: { profileId: "00000000-0000-0000-0000-000000000000", status: "ACTIVE" },
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("accepts the exact findFirst that onboarding performs", async () => {
+    await expect(
+      prisma.membership.findFirst({
+        where: { profileId: "00000000-0000-0000-0000-000000000000", status: "ACTIVE" },
+        select: { id: true },
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("still rejects a Membership query scoped by neither", async () => {
+    // The allowance is profileId specifically, not "any filter will do".
+    await expect(
+      prisma.membership.findMany({ where: { status: "ACTIVE" } }),
+    ).rejects.toThrow(TenantScopeError);
+  });
+
+  it("does NOT extend the profileId allowance to other models", async () => {
+    // Patient has a different shape entirely; a profileId filter there would be
+    // meaningless, and accepting one would widen the hole beyond Membership.
+    await expect(
+      prisma.patient.findMany({ where: { fullName: "Anyone" } }),
+    ).rejects.toThrow(TenantScopeError);
+  });
+
+  it("still requires organizationId when CREATING a membership", async () => {
+    // Reading is ambiguous; filing a new row never is.
+    await expect(
+      prisma.membership.create({
+        data: { profileId: "00000000-0000-0000-0000-000000000000" } as never,
+      }),
+    ).rejects.toThrow(TenantScopeError);
+  });
+
   it("refuses findUnique on a tenant-scoped model", async () => {
     await expect(
       prisma.membership.findUnique({

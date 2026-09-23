@@ -117,7 +117,8 @@ npm run db:generate  # regenerate the Prisma client
 npm run db:migrate   # create + apply a migration
 npm run db:push      # push schema without a migration (dev only)
 npm run db:studio    # browse the database
-npm run db:seed      # sample clinic (dev only; pass your signup email)
+npm run db:seed      # fill YOUR organization with sample data (dev only)
+npm run db:seed:clear # empty it again
 npm test             # Vitest, single run
 npm run test:watch   # Vitest, watch mode
 ```

@@ -16,7 +16,8 @@
     "postinstall": "prisma generate",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "db:seed:clear": "tsx prisma/seed.ts --clear"
   },
   "dependencies": {
     "@google/genai": "^2.24.0",

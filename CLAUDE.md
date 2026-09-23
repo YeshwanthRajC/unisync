@@ -737,6 +737,44 @@ the agent loops on arguments that can never parse and simply appears stupid.
 Unions, `.refine`, `.transform` and `z.date()` are unrepresentable by design;
 constraints go in `.describe()` prose, which the registry requires on every field.
 
+### 2026-09-23 — `Membership` may be scoped by `profileId` instead of tenant
+
+The tenant tripwire rejected `Membership.findFirst({ where: { profileId } })`,
+which broke both sign-in and onboarding — `requireOrganizationContext` makes that
+exact query.
+
+It was the guard being wrong, not the caller. `Membership` is the one table whose
+job is to ANSWER "which organizations does this person belong to?", so requiring
+an `organizationId` on it is impossible by definition: the filter would have to be
+the answer it is looking up.
+
+`profileId` is now an accepted scope for that model alone — narrower than a
+tenant, in fact, since it restricts the result to one person's rows. Deliberately
+a per-model allowance rather than a general `crossTenant(() => ...)` escape hatch,
+which would be reached for whenever the guard was inconvenient, i.e. exactly when
+it is working. Writes still require `organizationId` with no alternative: which
+organization a new membership belongs to is never ambiguous.
+
+The gap existed because the guard's own tests checked its rules in isolation and
+nothing walked the path a new user actually takes. `tests/onboarding.test.ts` now
+exercises sign-up through the real services and the real client.
+
+### 2026-09-23 — Sample data lives inside ONE account's organization
+
+The seed populates the organization the named user already has, rather than
+creating its own. The earlier version created a separate demo clinic, which was
+quietly broken: a user who had completed onboarding then had two memberships, and
+`requireOrganizationContext` resolves the oldest — so they would have landed in
+their own empty organization and never seen the data.
+
+Every other tenant is unreachable from the seed, enforced by the tripwire rather
+than by care. A second person signing up therefore gets a genuinely empty
+workspace, which is the correct first impression for real use. `npm run
+db:seed:clear -- <email>` empties it again.
+
+This makes empty states a first-class requirement of every module rather than an
+afterthought: for every real new user, the empty state IS the product on day one.
+
 ### 2026-09-23 — Authentication messages never reveal whether an account exists
 
 Sign-in returns one message — *"That email or password is not correct."* — for
