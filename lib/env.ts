@@ -5,8 +5,8 @@ import { z } from "zod";
  *
  * Two rules this module exists to enforce:
  *
- *  1. Secrets never reach the browser. `getServerEnv()` throws if it is ever
- *     evaluated in a client bundle, so an accidental import from a Client
+ *  1. Secrets never reach the browser. Every server accessor throws if it is
+ *     ever evaluated in a client bundle, so an accidental import from a Client
  *     Component fails loudly in development instead of leaking a key.
  *
  *  2. Validation is LAZY, not module-load-time. Eager parsing would make
@@ -55,30 +55,65 @@ export function getPublicEnv(): PublicEnv {
 // Server-only variables
 // ---------------------------------------------------------------------------
 
-const serverEnvSchema = z.object({
+/**
+ * Server variables are validated in INDEPENDENT GROUPS, one per dependency.
+ *
+ * A single combined schema looks tidier but couples unrelated subsystems: an
+ * empty `DATABASE_URL` would make the Gemini provider throw about a missing
+ * database, and the AI agent could not be exercised until Postgres credentials
+ * existed. Grouping keeps the promise this module is built on — a missing
+ * variable fails only the code path that actually needs it.
+ */
+
+const databaseEnvSchema = z.object({
   DATABASE_URL: nonEmpty,
   DIRECT_URL: nonEmpty,
-  GEMINI_API_KEY: nonEmpty,
-  GEMINI_MODEL: z.string().trim().default("gemini-2.5-flash"),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().trim().optional(),
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 });
 
-export type ServerEnv = z.infer<typeof serverEnvSchema>;
+const aiEnvSchema = z.object({
+  GEMINI_API_KEY: nonEmpty,
+  GEMINI_MODEL: z.string().trim().min(1).default("gemini-3.6-flash"),
+});
 
-let cachedServerEnv: ServerEnv | undefined;
+export type DatabaseEnv = z.infer<typeof databaseEnvSchema>;
+export type AiEnv = z.infer<typeof aiEnvSchema>;
 
-export function getServerEnv(): ServerEnv {
+let cachedDatabaseEnv: DatabaseEnv | undefined;
+let cachedAiEnv: AiEnv | undefined;
+
+/** Connection strings for Prisma. Runtime queries use the pooled URL. */
+export function getDatabaseEnv(): DatabaseEnv {
+  assertServer("getDatabaseEnv");
+  cachedDatabaseEnv ??= parseOrThrow(databaseEnvSchema, process.env, "server");
+  return cachedDatabaseEnv;
+}
+
+/** Credentials for the active LLM provider. */
+export function getAiEnv(): AiEnv {
+  assertServer("getAiEnv");
+  cachedAiEnv ??= parseOrThrow(aiEnvSchema, process.env, "server");
+  return cachedAiEnv;
+}
+
+/**
+ * The RLS-bypassing service role key, or `undefined` when unset.
+ *
+ * Deliberately returns `undefined` rather than throwing: it is optional, and
+ * the one caller that needs it raises its own, more specific error.
+ */
+export function getServiceRoleKey(): string | undefined {
+  assertServer("getServiceRoleKey");
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  return key ? key : undefined;
+}
+
+function assertServer(accessor: string): void {
   if (typeof window !== "undefined") {
     throw new Error(
-      "getServerEnv() was called in the browser. Server secrets must never be " +
+      `${accessor}() was called in the browser. Server secrets must never be ` +
         "imported into a Client Component.",
     );
   }
-  if (!cachedServerEnv) {
-    cachedServerEnv = parseOrThrow(serverEnvSchema, process.env, "server");
-  }
-  return cachedServerEnv;
 }
 
 // ---------------------------------------------------------------------------

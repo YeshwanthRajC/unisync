@@ -6,12 +6,28 @@
  * `lib/ai/` alone — no call site moves.
  */
 
-export type AiRole = "user" | "assistant";
+export type AiRole = "user" | "assistant" | "tool";
 
-export type AiMessage = {
-  role: AiRole;
-  content: string;
-};
+/**
+ * One turn of a conversation.
+ *
+ * A plain `{ role, content }` pair is not sufficient for a tool-using agent. The
+ * loop has to send back the model's own tool request and then the result of
+ * running it, and a provider will reject a transcript where those turns are
+ * missing or collapsed into prose. So the assistant turn can carry `toolCalls`,
+ * and a `tool` turn carries a result.
+ */
+export type AiMessage =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string; toolCalls?: AiToolCall[] }
+  | {
+      role: "tool";
+      /** Correlates with the originating call. Absent for providers that omit ids. */
+      toolCallId?: string;
+      toolName: string;
+      /** Whatever the tool returned, or a structured error for the model to read. */
+      result: unknown;
+    };
 
 /**
  * A single argument of a tool, described in a JSON-Schema-like shape that
@@ -27,6 +43,21 @@ export type AiToolParameterSchema = {
 };
 
 /**
+ * A tool's argument list.
+ *
+ * Narrowed to an object on purpose: every provider models tool arguments as a
+ * named set, and Gemini rejects a declaration whose top level is a bare scalar.
+ * Encoding that in the type means a malformed declaration cannot be written,
+ * rather than failing on the first real request.
+ */
+export type AiObjectParameterSchema = {
+  type: "object";
+  description?: string;
+  properties: Record<string, AiToolParameterSchema>;
+  required?: string[];
+};
+
+/**
  * What the model is told a tool looks like.
  *
  * This is only the *declaration* handed to the LLM. Execution, argument
@@ -36,7 +67,7 @@ export type AiToolParameterSchema = {
 export type AiToolDefinition = {
   name: string;
   description: string;
-  parameters: AiToolParameterSchema;
+  parameters: AiObjectParameterSchema;
 };
 
 /** A tool invocation requested by the model. Arguments are UNTRUSTED. */
@@ -58,6 +89,11 @@ export type AiGenerateRequest = {
   maxOutputTokens?: number;
   /** Overrides the provider's configured default model. */
   model?: string;
+  /**
+   * Cancellation. The agent loop is capped at several provider calls per user
+   * message; without this, an abandoned request still burns the whole budget.
+   */
+  signal?: AbortSignal;
 };
 
 export type AiUsage = {

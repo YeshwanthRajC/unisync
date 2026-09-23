@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { prisma } from "@/lib/db/prisma";
+import { checkDatabaseReachable } from "@/lib/db/health";
 import {
   isDatabaseConfigured,
   isGeminiConfigured,
@@ -29,16 +29,9 @@ export async function GET() {
   const database: DependencyStatus = { configured: isDatabaseConfigured() };
 
   if (database.configured) {
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      database.reachable = true;
-    } catch (error) {
-      database.reachable = false;
-      // The message can contain a host name but never a password, because
-      // Prisma redacts credentials in connection errors.
-      database.detail =
-        error instanceof Error ? error.message.split("\n")[0] : "Unknown error";
-    }
+    const probe = await checkDatabaseReachable();
+    database.reachable = probe.reachable;
+    if (!probe.reachable) database.detail = probe.detail;
   }
 
   const ready = supabase.configured && gemini.configured && database.reachable === true;

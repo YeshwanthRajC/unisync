@@ -3,7 +3,7 @@ import "server-only";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
-import { getPublicEnv, getServerEnv } from "@/lib/env";
+import { getPublicEnv, getServiceRoleKey } from "@/lib/env";
 
 /**
  * Supabase client for Server Components, Route Handlers and Server Actions.
@@ -48,7 +48,7 @@ export async function createSupabaseServerClient() {
  */
 export function createSupabaseAdminClient() {
   const publicEnv = getPublicEnv();
-  const serviceRoleKey = getServerEnv().SUPABASE_SERVICE_ROLE_KEY;
+  const serviceRoleKey = getServiceRoleKey();
 
   if (!serviceRoleKey) {
     throw new Error(

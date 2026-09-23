@@ -70,7 +70,7 @@ source code or in `CLAUDE.md`.**
 | `DATABASE_URL` | Supabase → Project Settings → Database → Connection string → **Transaction pooler** (port 6543). Append `?pgbouncer=true&connection_limit=1` |
 | `DIRECT_URL` | Same page → **Session/direct** connection (port 5432). Used only for migrations |
 | `GEMINI_API_KEY` | <https://aistudio.google.com/apikey> |
-| `GEMINI_MODEL` | Optional; defaults to `gemini-2.5-flash` |
+| `GEMINI_MODEL` | Optional; defaults to `gemini-3.6-flash` |
 
 Anything named `NEXT_PUBLIC_*` is compiled into the browser bundle and is
 therefore public. Never give a secret one of those names.
@@ -108,9 +108,15 @@ npm run db:generate  # regenerate the Prisma client
 npm run db:migrate   # create + apply a migration
 npm run db:push      # push schema without a migration (dev only)
 npm run db:studio    # browse the database
+npm test             # Vitest, single run
+npm run test:watch   # Vitest, watch mode
 ```
 
-There is no test suite yet.
+The test suite covers server logic only — the permission matrix, tenant
+isolation, AI tool validation, and the manual-gate rules that keep appointment
+closure, payment confirmation and email sending in human hands. It runs against
+the real development database, so `.env.local` must be configured first. There is
+no browser end-to-end suite.
 
 ## Project structure
 

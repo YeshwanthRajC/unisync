@@ -7,7 +7,9 @@
 > implementation decision. A decision that is not written down here has not
 > been made.
 
-**Last updated:** 2026-09-23 — development environment initialization.
+**Last updated:** 2026-09-23 — server foundation landed: command envelope,
+tenant tripwire, human-intent gate, AI tool factory, Vitest. `/api/health`
+reports `ready`.
 
 ---
 
@@ -136,8 +138,10 @@ Status legend: **Not started** · **Scaffolded** · **In progress** · **Done**
 | Validation | **Zod 4** | One schema mechanism for environment variables, form input, and AI tool arguments. |
 | Hosting | **Vercel** (app) + **Supabase** (data) | Zero-config Next.js deploys; managed Postgres. |
 
+| Testing | **Vitest** | Server-logic tests only — the permission matrix, tenant isolation, AI tool validation and the manual gates. Runs against the real development database. |
+
 Deliberately **not** added: no separate Express backend, no state-management
-library, no component library beyond shadcn/ui, no test framework yet.
+library, no component library beyond shadcn/ui, no browser E2E framework.
 
 ---
 
@@ -153,18 +157,38 @@ Next.js (App Router)
     │  Server Actions ............ mutations from forms
     │  Route Handlers ............ /api/* for webhooks and the AI endpoint
     ▼
-Server-side business logic  (lib/, plus services/<module> as modules land)
-    │  lib/auth/session.ts ....... WHO is calling, in WHICH organization
-    │  lib/auth/permissions.ts ... MAY they do this
+Transport wrappers  (lib/server/)
+    │  action.ts .................. Server Actions: parse, permit, audit, mint
+    │                               HumanIntent; returns ActionResult<T>
+    │  route.ts ................... Route Handlers: error -> HTTP status
+    │  guard.ts ................... RSC reads: redirect on 401/403
     ▼
-AI Agent  (lib/ai/)
+Auth & tenancy  (lib/auth/)
+    │  session.ts ................. WHO is calling, in WHICH organization
+    │  permissions.ts ............. MAY they do this
+    │  human-intent.ts ............ did a PERSON ask for this
+    ▼
+Business services  (services/<module>/)
+    │  schema.ts  zod input      rules.ts  pure logic
+    │  queries.ts reads          commands.ts writes (require a UnitOfWork)
+    ▼
+Command envelope  (lib/server/unit.ts)
+    │  runCommand() ............... one transaction, one AuditLog row
+    ▼
+AI Agent  (lib/ai/)  — sits BESIDE the UI, never beneath it
     │  provider.ts ............... resolves the active LlmProvider
     │  gemini.ts ................. the only file importing the Gemini SDK
-    │  tools.ts .................. tool contract + registry
+    │  tools/define.ts ........... defineTool(): parse, erase, invoke
+    │  tools/index.ts ............ the registry + its build-time assertions
+    │  agent/schema.ts ........... zod -> model-facing declaration
     ▼
 Application tools  (validated, permission-checked, audited)
+    │  they call the SAME services the UI calls, via runCommand
     ▼
-Database  (lib/db/prisma.ts — the only PrismaClient in the codebase)
+Database  (lib/db/)
+    │  prisma.ts ................. the only PrismaClient; lazy, tripwire-extended
+    │  scope.ts .................. orgScope() / orgWhere()
+    │  tenant-guard.ts ........... throws on an unscoped tenant query
     ▼
 PostgreSQL (Supabase)
 ```
@@ -230,8 +254,10 @@ modules, each carrying a non-null `organizationId`.
 
 ### Migrations
 
-No migration has been run yet — the database is not connected. Once
-`DIRECT_URL` is set, the first migration creates the four tables above.
+First migration applied 2026-09-23: `20260923022206_init_tenancy_foundation`,
+creating the four tables above on Supabase Postgres 17.6. Verified by a
+write → read → delete round trip through the pooled connection; the database was
+left empty afterwards.
 
 ---
 
@@ -246,8 +272,14 @@ organization; choose the right tool; ask for missing details; request
 confirmation for high-impact actions; report what it did.
 
 **Available tools** — **none registered yet.** `AI_TOOL_REGISTRY` in
-`lib/ai/tools.ts` is intentionally empty. Tools are added alongside the module
-whose service layer they call.
+`lib/ai/tools/index.ts` is intentionally empty. Each module contributes its tools
+when its service layer exists, so a tool can never reference a service that has
+not been written.
+
+All tools live in `lib/ai/tools/<module>.tools.ts`, NOT beside their service. The
+answer to "what can the agent do in this system?" must be a directory listing
+rather than a repo-wide grep, because that listing is the artefact a security
+review of this design needs.
 
 **Tool contract** — every tool declares:
 
@@ -343,12 +375,12 @@ Names only — **never record a value here.** See `.env.example`.
 | --- | --- | --- | --- |
 | `NEXT_PUBLIC_APP_URL` | public | yes | Base URL for auth redirects and callbacks. |
 | `NEXT_PUBLIC_SUPABASE_URL` | public | yes | Supabase project URL. |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | public | yes | Anon/publishable key; constrained by RLS. |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | public | yes | Anon/publishable key (`sb_publishable_…`); constrained by RLS. |
 | `SUPABASE_SERVICE_ROLE_KEY` | **secret** | no | Bypasses RLS. Administrative tasks only. Never exposed to the agent. |
 | `DATABASE_URL` | **secret** | yes | Pooled connection, port 6543, `?pgbouncer=true&connection_limit=1`. Runtime queries. |
 | `DIRECT_URL` | **secret** | yes | Direct connection, port 5432. Migrations only. |
 | `GEMINI_API_KEY` | **secret** | yes | Gemini API key. Server-side only. |
-| `GEMINI_MODEL` | config | no | Default model (`gemini-2.5-flash`). |
+| `GEMINI_MODEL` | config | no | Default model (`gemini-3.6-flash`). |
 
 Rules: anything named `NEXT_PUBLIC_*` is compiled into the browser bundle and
 is therefore public — never give a secret such a name. Secrets live in
@@ -379,7 +411,18 @@ npm run db:migrate   # create and apply a migration
 npm run db:studio    # browse data
 ```
 
-Tests: **no test framework is installed yet.** See Future Improvements.
+Tests:
+
+```bash
+npm test             # vitest run
+npm run test:watch   # vitest
+```
+
+Tests run against the **real** development database in a single fork with
+`fileParallelism: false`, because tenant-isolation tests assert on row counts and
+parallel files would see each other's fixtures. `server-only` is aliased to a
+no-op in `vitest.config.mts`: that package throws unless the resolver picks its
+`react-server` condition, which Node applies only via a CLI flag.
 
 ---
 
@@ -388,8 +431,22 @@ Tests: **no test framework is installed yet.** See Future Improvements.
 - [x] **Development environment** — Next.js, strict TypeScript, Tailwind v4,
       shadcn/ui, Prisma 7, Supabase clients, Gemini abstraction, Git;
       lint, typecheck, and build all passing.
-- [ ] **Credentials configured** — `.env.local` is scaffolded but empty;
-      Supabase and Gemini values are still required.
+- [x] **Supabase API credentials** — project URL and publishable key set and
+      verified live: GoTrue reachable, key accepted by Auth and PostgREST.
+- [x] **Gemini credentials** — key set and verified live against
+      `gemini-3.6-flash`, including a round-trip function call through
+      `LlmProvider.generate()`.
+- [x] **Database credentials** — pooled `DATABASE_URL` (Supavisor 6543) and
+      `DIRECT_URL` (5432) set and verified; Postgres 17.6, region
+      `ap-northeast-1`.
+- [x] **First migration applied** — the four tenancy tables exist; a Prisma
+      write/read/delete round trip over the pooled connection succeeds.
+      `/api/health` reports `ready`.
+- [x] **Server foundation** — permission vocabulary (45 permissions assembled
+      from grant blocks), domain errors, `ActionResult`, `runCommand` audited
+      transaction envelope, tenant scoping + tripwire, `HumanIntent` gate, action
+      / route / RSC guard wrappers, `defineTool` factory with Zod-derived tool
+      schemas, ESLint architectural boundaries, Vitest with 45 tests.
 - [ ] **Authentication** — sign-up, sign-in, sign-out, `(auth)` routes, and
       `Profile` provisioning on first login.
 - [ ] **Organization setup** — create an organization, invite members, switch
@@ -496,31 +553,174 @@ Next.js 16 renamed the `middleware.ts` convention to `proxy.ts`. Ours refreshes
 the Supabase session and nothing else. Authorization lives where data is read,
 so a forgotten matcher pattern cannot silently expose a route.
 
+### 2026-09-23 — Server env validated per dependency, not as one object
+
+`getServerEnv()` parsed every server variable through a single Zod object, so
+one empty variable failed every unrelated subsystem. Concretely: with
+`DATABASE_URL` blank, constructing `GeminiProvider` threw *"missing DATABASE_URL"*
+and the AI agent could not be exercised at all until Postgres credentials
+existed. That directly contradicted the reason this module validates lazily in
+the first place.
+
+It is now three independent, independently memoised accessors —
+`getDatabaseEnv()`, `getAiEnv()`, `getServiceRoleKey()` — each validating only
+its own group, and each keeping the browser guard. A missing variable now fails
+exactly the one code path that needs it. `NODE_ENV` left the schema entirely; it
+is supplied by the toolchain, not by us, and `lib/db/prisma.ts` reads
+`process.env.NODE_ENV` directly.
+
+### 2026-09-23 — Default Gemini model is `gemini-3.6-flash`
+
+`gemini-2.5-flash` still appears in `ListModels` but `generateContent` returns
+HTTP 404 for accounts created after its retirement: *"no longer available to
+new users."* A key can therefore look valid and list the model while every
+generation fails — so the model id, not just the key, has to be verified
+against a real call. `gemini-3.6-flash` is Google's named successor and is
+confirmed working, including function calling, which the agent design depends
+on.
+
+### 2026-09-23 — One audited transaction per command (`runCommand`)
+
+Every write goes through `lib/server/unit.ts`. It opens the transaction, runs the
+body, and writes **one** `AuditLog` row inside that same transaction before
+commit.
+
+Two properties follow, and both are the reason it exists rather than being a
+convenience. Audit-once becomes a property of the transaction: there is no window
+in which a patient exists and no record of who created them does. And service
+authors cannot forget to audit, because it was never their job — a command body
+never imports the audit module. Composed commands receive the same unit and add
+detail via `note()`, so one user action yields one record rather than three.
+
+Rejected: auto-auditing through a Prisma `$allOperations` extension. It sees
+`patient.update`, not `appointment.cancel` — it cannot know intent, and it fires
+once per row, so a 30-row write would produce 30 records.
+
+Actor attribution (`USER` vs `AI_AGENT` + `aiToolName`) lives in the envelope,
+i.e. in the invocation channel, not in `OrganizationContext`. That is why adding
+the agent required no change to `lib/auth/session.ts`: the service is genuinely
+identical whichever drove it.
+
+### 2026-09-23 — Tenant isolation detects rather than injects
+
+`lib/db/tenant-guard.ts` is a Prisma extension that **throws** when an operation
+on a tenant-scoped model carries no `organizationId`. It never rewrites a query.
+
+The obvious alternative — an extension that silently injects the filter — was
+rejected for a decisive reason: it cannot see nested writes. A
+`patient.create({ data: { appointments: { create: [...] } } })` would produce
+child rows with no tenant filter, which is precisely the failure the extension
+would have been bought to prevent. It also has to rewrite `findUnique` into
+`findFirst` to work at all, changing return semantics, and it hides the filter
+from both the reader and the type checker.
+
+Detection keeps queries legible and return types honest, and a forgotten filter
+fails loudly at the call site that forgot it. Verified empirically: Prisma 7.10
+query extensions **do** propagate to the `tx` client inside `$transaction`, so the
+tripwire covers writes and not merely reads (`tests/tenant-guard.test.ts`).
+`findUnique` is refused outright on tenant-scoped models.
+
+### 2026-09-23 — The manual gates are carried by the type system
+
+Closing an appointment, confirming a payment and sending a patient email require a
+`HumanIntent` — a token branded with a `unique symbol`, mintable only by
+`lib/server/action.ts`, which `lib/ai/**` is forbidden by ESLint from importing.
+
+An AI tool that tries to close an appointment therefore does not fail a runtime
+check that a later refactor might remove. **It fails `tsc`.** The guarantee is
+checked on every build rather than only on the paths a test happened to cover, and
+`closedBy` is written from `intent.profileId` so "who and when" cannot be got
+wrong by a caller.
+
+This is one of four independent layers: database `CHECK` constraints (arriving
+with the schema), this brand, the absence of any service that changes these states
+as a side effect, and `HUMAN_ONLY_PERMISSIONS` + the registry assertion.
+
+### 2026-09-23 — Server Actions return failures; `error.tsx` does not classify them
+
+A thrown error does not survive the server/client boundary — Next.js replaces the
+message with a generic one plus a digest in production. So actions return
+`ActionResult<T>`, and `isAuthError` is consumed in three server-side wrappers
+(`action.ts`, `route.ts`, `guard.ts`) and deliberately **not** in `error.tsx`,
+where it would appear to work in `next dev` and silently stop working once
+deployed. `unstable_rethrow(error)` is the first statement of every catch, or the
+wrapper would swallow `redirect()`.
+
+`experimental.authInterrupts` (`unauthorized()` / `forbidden()`) was declined; a
+sign-in redirect and a `/no-access` route need no experimental flag.
+
+### 2026-09-23 — `defineTool` erases the generic by closure; tool schemas derive from Zod
+
+`AI_TOOL_REGISTRY` could not hold a concrete tool: `execute` is an arrow-typed
+property, so `strictFunctionTypes` checks it contravariantly and
+`AiTool<{id:string}>` is not assignable to `AiTool<unknown>`. The old
+`describe: (input: never) => string` was storable but impossible to call.
+
+`defineTool` fixes both by erasing the generic in a closure — `prepare()` parses
+and returns an `invoke` that closes over the parsed value while `TInput` is still
+in scope. No cast, no `any`, and the contravariant `execute` never appears in the
+erased type.
+
+Tool argument declarations are DERIVED from the Zod schema via `z.toJSONSchema`
+(Zod 4.6.5 ships it), then narrowed — throwing on anything the neutral type cannot
+express. Declaring arguments twice is not merely verbose; it drifts in the least
+visible direction, telling the model a field is optional while Zod requires it, so
+the agent loops on arguments that can never parse and simply appears stupid.
+Unions, `.refine`, `.transform` and `z.date()` are unrepresentable by design;
+constraints go in `.describe()` prose, which the registry requires on every field.
+
+### 2026-09-23 — `AiMessage` widened to carry tool calls and results
+
+The original `{ role: "user" | "assistant"; content: string }` could not express a
+tool request or its result, which makes a multi-turn agent loop unrepresentable —
+the provider rejects a transcript where those turns are missing. It is now a union
+including an assistant turn with `toolCalls` and a `tool` result turn, mapped in
+`gemini.ts` to Gemini's `functionCall` / `functionResponse` parts. Gemini does not
+always populate a call `id`, so results are correlated by name and position.
+
 ---
 
 ## Known Issues
 
-1. **No credentials configured.** `.env.local` exists with empty values.
-   Supabase, the database, and Gemini are all unverified; `/api/health` reports
-   `setup_incomplete`. No migration has been run.
-2. **No Row Level Security policies.** Tenant isolation currently rests on the
-   application layer alone. RLS must be written before production — it is the
-   backstop for an application-layer mistake.
+1. **No Supabase Auth users or `Profile` rows exist yet.** All three
+   dependencies are connected and `/api/health` reports `ready`, but the
+   database holds no data, so `requireOrganizationContext()` has nothing to
+   resolve. The authentication module is the next step.
+2. **No Row Level Security policies yet.** Application-layer scoping plus the
+   tenant tripwire are in place, but nothing is enforced in Postgres. Arriving
+   with the schema as an RLS + `FORCE ROW LEVEL SECURITY` lockdown of the
+   browser-facing publishable key.
+
+   Note for whoever writes it: Prisma connects over `DATABASE_URL` as the table
+   **owner**, and owners bypass RLS unless the table is set to `FORCE ROW LEVEL
+   SECURITY`. Supabase's usual `auth.uid()` policies also evaluate to NULL for a
+   Prisma connection, because Prisma does not carry a Supabase JWT. RLS added
+   without accounting for both is decorative — it looks protective and enforces
+   nothing.
 3. **`npm audit` reports 4 high-severity advisories** in `deepmerge-ts` and
    `mysql2`, both transitive dependencies of the **Prisma CLI** (dev-only).
    `mysql2` is never loaded on a PostgreSQL datasource. The only offered fix is
    a downgrade to Prisma 6, which would be a larger regression. Revisit when
    Prisma 7.x updates the dependency.
-4. **No tests.** Nothing is guarded by automated checks beyond lint, typecheck,
-   and build.
+4. **Test coverage is deliberately narrow.** 45 Vitest tests cover the
+   security-critical declarative logic — the permission matrix, the tenant
+   tripwire, AI tool validation and the registry gates. Service behaviour and UI
+   are not covered, and there is no browser E2E.
 5. **`Profile` rows are not provisioned yet.** A Supabase Auth signup does not
    currently create a `Profile`, so `requireOrganizationContext()` would find
    no membership. The authentication module handles this.
 6. **`/api/health` is unauthenticated.** It exposes only booleans, but it
    should be restricted before production.
-7. **Prisma 8.0 is in release candidate.** We are on stable 7.10.0
+7. **`AuditLog` has no idempotency key.** A double-submitted Server Action
+   produces two records. A `commandId` + `@@unique([organizationId, commandId])`
+   arrives with the schema work.
+8. **`requireOrganizationContext()` silently picks the oldest membership.** Its
+   comment claims ambiguity is an error; the code takes `memberships[0]`. Harmless
+   while the product has one administrator per organization, but it needs an
+   active-organization cookie before multi-org is real.
+9. **Prisma 8.0 is in release candidate.** We are on stable 7.10.0
    deliberately.
-8. **The `(auth)` and `(dashboard)` route groups do not exist yet.** They are
+10. **The `(auth)` and `(dashboard)` route groups do not exist yet.** They are
    created with the authentication module rather than as empty folders — Git
    cannot track an empty directory, and placeholder pages would be deleted at
    the next step.
