@@ -4,6 +4,7 @@ import path from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
 
+import { prisma } from "@/lib/db/prisma";
 import { TENANT_SCOPED_MODELS } from "@/lib/db/tenant-guard";
 import { getPublicEnv } from "@/lib/env";
 
@@ -112,5 +113,53 @@ describe("Row Level Security lockdown", () => {
       expect(error?.code).toBe("42501");
       expect(data).toBeNull();
     }
+  });
+
+  it("still lets the application read and write (RLS must not lock us out)", async () => {
+    // The failure mode this guards against is silent and total: RLS makes SELECT
+    // return ZERO ROWS rather than raising, so if the role Prisma connects as
+    // were subject to the FORCEd policies, every screen in the application would
+    // show "no data" and every test asserting an empty result would still pass.
+    //
+    // So assert the round trip explicitly, and assert the mechanism that makes it
+    // work, rather than inferring health from an empty list.
+    const organization = await prisma.organization.create({
+      data: {
+        name: "RLS Round Trip",
+        slug: `rls-roundtrip-${Date.now()}`,
+        timezone: "Asia/Kolkata",
+      },
+    });
+
+    try {
+      const readBack = await prisma.organization.findFirst({
+        where: { id: organization.id },
+      });
+      expect(readBack?.name).toBe("RLS Round Trip");
+
+      // A tenant-scoped write and read, which is what every module does.
+      const patient = await prisma.patient.create({
+        data: { organizationId: organization.id, fullName: "Round Trip Patient" },
+      });
+      const patients = await prisma.patient.findMany({
+        where: { organizationId: organization.id },
+      });
+      expect(patients).toHaveLength(1);
+      expect(patients[0]?.id).toBe(patient.id);
+    } finally {
+      // Cascades to the patient.
+      await prisma.organization.delete({ where: { id: organization.id } });
+    }
+  });
+
+  it("connects as a role that bypasses RLS, by design and on purpose", async () => {
+    // Documents WHY the round trip above works, so a future reader does not
+    // conclude the lockdown is protecting our own queries. It is not: tenant
+    // isolation for Prisma is the application layer plus the tripwire.
+    const rows = await prisma.$queryRaw<
+      Array<{ rolbypassrls: boolean }>
+    >`SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user`;
+
+    expect(rows[0]?.rolbypassrls).toBe(true);
   });
 });
