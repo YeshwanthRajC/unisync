@@ -546,7 +546,7 @@ async function main() {
           `Dear ${patient.fullName},\n\n` +
           "This is a reminder about your upcoming appointment with us.\n\n" +
           "Please arrive ten minutes early. Reply to this email if you need to " +
-          "reschedule.\n\nKind regards,\nBright Smile Dental",
+          `reschedule.\n\nKind regards,\n${organization.name}`,
         status: "DRAFT",
         // Alternating, so the UI has both kinds to show.
         generatedByAI: index % 2 === 0,
@@ -602,9 +602,10 @@ async function main() {
   await prisma.$disconnect();
 
   console.log(
-    `\nDone. Sign in as ${authUser.email} to see "Bright Smile Dental".\n` +
-      "Re-run this command at any time; it recreates the demo clinic and leaves\n" +
-      "every other organization untouched.",
+    `\nDone. Sign in as ${authUser.email} to see "${organization.name}".\n\n` +
+      "Re-run at any time to regenerate, or pass --clear to empty it again.\n" +
+      "Only this organization was touched; any other account keeps an empty\n" +
+      "workspace, which is what a real new user should see.",
   );
 }
 

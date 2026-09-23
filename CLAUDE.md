@@ -7,9 +7,10 @@
 > implementation decision. A decision that is not written down here has not
 > been made.
 
-**Last updated:** 2026-09-23 — authentication, organization onboarding and the
-visual design system landed. Sign-up, sign-in, password reset and the email
-confirmation callback all work against live Supabase Auth.
+**Last updated:** 2026-09-23 — authentication and onboarding verified end to end
+against live Supabase Auth; the development clinic is seeded. See
+[`docs/handoff.md`](docs/handoff.md) for current state and the traps already paid
+for.
 
 ---
 
