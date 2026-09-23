@@ -7,12 +7,11 @@
 > implementation decision. A decision that is not written down here has not
 > been made.
 
-**Last updated:** 2026-09-23 — the Appointments module shipped, including the
-first manual gate (`closeAppointment`) built and verified end to end: the
-`HumanIntent` type-level guarantee, the database `CHECK` constraint, and the
-real UI flow, all walked live in the browser. See
-[`docs/handoff.md`](docs/handoff.md) for current state and the traps already
-paid for.
+**Last updated:** 2026-09-23 — Consultations and Prescriptions shipped
+(services, UI, tests, typecheck/lint/build all clean). **Read
+[`docs/handoff.md`](docs/handoff.md) first** — it has the current step,
+what's verified vs. not, and exactly what to do next; this file is the
+architecture and decision record underneath it.
 
 ---
 
@@ -106,37 +105,79 @@ requires the visit's outcome to be written down. Every other status change
 no such requirement — the distinction is deliberate: those are logistics, not
 a clinical judgement about what happened.
 
-### 3. Billing & Payments
+### 3. Consultations & Prescriptions
+
+- **Purpose** — Clinical record of what was found and done during a visit,
+  and what was prescribed as a result.
+- **Main entities** — `Consultation`, `Prescription`, `PrescriptionItem`.
+- **Important workflows** — record a consultation (optionally linked to one
+  appointment — the relation is 1:1, enforced); edit a consultation's clinical
+  fields (not which patient/appointment it belongs to — those are fixed at
+  creation); issue a prescription with one or more medicines (create-only —
+  see below).
+- **Current status** — **Done** (core workflow). `services/consultations/`
+  and `services/prescriptions/` each follow `schema.ts`, `queries.ts`,
+  `commands.ts`, `index.ts` — no `rules.ts`, deliberately: neither module has
+  pure business logic distinct enough from Zod validation to extract yet.
+  Reached from the patient detail page (Consultations/Prescriptions cards) and
+  from a completed appointment ("Record consultation" shortcut), not from a
+  top-level nav item — these are records attached to a patient or a visit, not
+  a daily-use list of their own, so there is no `/consultations` or
+  `/prescriptions` index page. Covered by `tests/consultations.test.ts` and
+  `tests/prescriptions.test.ts`.
+- **Two rules worth knowing before touching this code:**
+  1. `createConsultation`/`updateConsultation` never write to `appointments` —
+     recording a consultation must not change appointment status; closing
+     stays a separate act via `closeAppointment`. Asserted in
+     `tests/consultations.test.ts` by reloading the appointment row.
+  2. `createPrescription` is the only write prescriptions have. Items are
+     never rewritten in place once issued (see the model comment in
+     `prisma/schema.prisma`) — a correction is a new prescription. There is no
+     `updatePrescription` and none should be added without revisiting that
+     decision deliberately.
+- **Future** — a printable/PDF prescription view, a medicine name-and-dosage
+  autocomplete, structured allergy/interaction warnings.
+
+### 4. Billing & Payments
 
 - **Purpose** — Turn delivered treatment into invoices and track payment.
 - **Main entities** *(planned)* — `Invoice`, `InvoiceLine`, `Payment`,
   `ServiceCatalogItem`, `TaxRate`.
 - **Important workflows** *(planned)* — generate an invoice from an
   appointment; record part payments; outstanding-balance reporting; refunds.
-- **Current status** — **Not started.**
+- **Current status** — **Not started. Next up.** Carries the product's
+  **second manual gate**, `confirmPayment` — copy the pattern
+  `closeAppointment` established: a `HumanIntent`-gated command, a single UI
+  form that is the only path to it (see
+  `app/(dashboard)/appointments/close-appointment-form.tsx` for the shape),
+  and a test that reloads the row / attempts a raw-SQL insert to prove the
+  database `CHECK` constraint holds independently of the application. `Bill`,
+  `BillItem` and `Payment` models already exist in the schema (see Database
+  Design below) — this module is schema-ready, service-layer not started.
 - **Future** — payment-gateway integration, insurance claims.
 
-### 4. Reminders & Follow-ups
+### 5. Reminders & Follow-ups
 
 - **Purpose** — Make sure nothing that needs a nudge is forgotten.
-- **Main entities** *(planned)* — `ReminderRule`, `ScheduledReminder`,
-  `NotificationLog`.
+- **Main entities** — `FollowUp` (schema exists). `ReminderRule`,
+  `ScheduledReminder`, `NotificationLog` remain planned/renamed — see the
+  existing `Notification` model in Database Design.
 - **Important workflows** *(planned)* — appointment reminders; recall
   follow-ups; overdue-payment nudges; delivery logging.
 - **Current status** — **Not started.**
 - **Future** — WhatsApp / SMS / email channels, per-organization quiet hours.
 
-### 5. Inventory Management
+### 6. Inventory Management
 
 - **Purpose** — Track consumables and materials so the clinic does not run out.
-- **Main entities** *(planned)* — `InventoryItem`, `StockBatch`,
-  `StockMovement`, `Supplier`, `PurchaseOrder`.
+- **Main entities** — `InventoryItem`, `StockMovement` (schema exists;
+  `StockBatch`, `Supplier`, `PurchaseOrder` remain planned).
 - **Important workflows** *(planned)* — stock in and out; low-stock alerts;
   expiry tracking; reorder.
 - **Current status** — **Not started.**
 - **Future** — supplier catalogues, automatic reorder suggestions.
 
-### 6. AI Agent
+### 7. AI Agent
 
 - **Purpose** — Administrative assistant with organization context, operating
   through controlled tools. See [AI Agent Architecture](#ai-agent-architecture).
@@ -553,7 +594,9 @@ no-op in `vitest.config.mts`: that package throws unless the resolver picks its
 - [x] **Patient module**
 - [x] **Appointment module** — including the manual close gate, built and
       verified end to end (type system, database `CHECK`, real UI flow).
-- [ ] **Billing module**
+- [x] **Consultations & Prescriptions module**
+- [ ] **Billing module** — next up; carries the second manual gate
+      (`confirmPayment`).
 - [ ] **Reminder system**
 - [ ] **Inventory module**
 - [ ] **AI agent** — conversation loop, confirmation flow, chat UI.
@@ -974,6 +1017,44 @@ Server Component; the barrel is only unsafe across the client boundary. This
 is the same reason `patient-form.tsx` never imported from `@/services/patients`
 at all — it never needed to, which is worth noting explicitly now that a
 counterexample exists.
+
+### 2026-09-23 — `rules.ts` is written only when a module has pure logic to hold
+
+`services/consultations/` and `services/prescriptions/` ship as four files —
+`schema.ts`, `queries.ts`, `commands.ts`, `index.ts` — with no `rules.ts`.
+Patients has one (`calculateAge`, `initialsFor`); Appointments has one (the
+status state machine, three timezone conversions). Neither Consultations nor
+Prescriptions has anything comparable: what each module needed checking —
+"does this appointment belong to this patient", "is there already a
+consultation here" — needs a database read to answer, so it lives in
+`commands.ts` next to the write it guards, not in a pure function.
+
+An empty `rules.ts` would have been worse than an absent one: a file that
+exists only to satisfy a convention invites something to be stuffed into it
+later that belongs somewhere else. The five-file shape in the Conventions
+section (and in `docs/handoff.md`) describes the pattern a module reaches for
+when it needs each piece, not a template every module fills in regardless.
+
+### 2026-09-23 — Prescriptions are create-only; consultations never touch appointments
+
+Two narrow rules, both load-bearing for the next module that touches either
+table:
+
+**No `updatePrescription`.** The `PrescriptionItem` model comment says items
+are "never rewritten in place once the prescription is issued" — that is a
+clinical record of what was actually handed to a patient, and editing it after
+the fact would let history quietly disagree with what happened. A correction
+is a new prescription. If a future change adds an update path here, that is
+the decision being reopened, not a gap being filled.
+
+**`createConsultation`/`updateConsultation` never write to `appointments`.**
+This is the same principle `closeAppointment` embodies from the other
+direction: an appointment's status is a human's explicit record of what
+happened at a scheduled slot, and a consultation is a clinical record of what
+was found — conflating them would mean recording clinical notes could
+accidentally complete or otherwise mutate the appointment. Asserted in
+`tests/consultations.test.ts` by reloading the appointment row after recording
+a consultation against it and checking `status`/`closedAt` are untouched.
 
 ---
 
