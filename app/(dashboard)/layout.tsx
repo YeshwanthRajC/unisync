@@ -1,3 +1,4 @@
+import { DashboardShell } from "@/components/layout/dashboard-shell";
 import { loadOrganization } from "@/lib/server/guard";
 
 /**
@@ -10,12 +11,13 @@ import { loadOrganization } from "@/lib/server/guard";
  * Note this layout is not the security boundary — each page still resolves its own
  * context and permission where it reads data, so a route added without a guard
  * cannot leak. This exists so the shell has an organization to render.
- *
- * The full sidebar and assistant panel land with the design-system step; for now
- * this is deliberately plain so the auth flow can be verified end to end.
  */
 export default async function DashboardLayout({ children }: LayoutProps<"/">) {
-  await loadOrganization();
+  const ctx = await loadOrganization();
 
-  return <div className="flex min-h-svh flex-1 flex-col">{children}</div>;
+  return (
+    <DashboardShell organizationName={ctx.organizationName}>
+      {children}
+    </DashboardShell>
+  );
 }

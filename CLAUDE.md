@@ -7,10 +7,10 @@
 > implementation decision. A decision that is not written down here has not
 > been made.
 
-**Last updated:** 2026-09-23 — authentication and onboarding verified end to end
-against live Supabase Auth; the development clinic is seeded. See
-[`docs/handoff.md`](docs/handoff.md) for current state and the traps already paid
-for.
+**Last updated:** 2026-09-23 — application shell (sidebar, Organization Pulse) and
+the Patients module shipped end to end and verified in the browser against a
+fresh sign-up. See [`docs/handoff.md`](docs/handoff.md) for current state and
+the traps already paid for.
 
 ---
 
@@ -60,13 +60,19 @@ Status legend: **Not started** · **Scaffolded** · **In progress** · **Done**
 ### 1. Patients
 
 - **Purpose** — System of record for the people the organization serves.
-- **Main entities** *(planned)* — `Patient`, `PatientContact`,
-  `MedicalHistoryEntry`, `PatientDocument` (Supabase Storage).
-- **Important workflows** *(planned)* — register a patient; search and
-  deduplicate; maintain contact and medical history; attach documents (x-rays,
-  consent forms); merge duplicate records.
-- **Current status** — **Not started.**
-- **Future** — patient-facing portal, consent capture, document OCR.
+- **Main entities** — `Patient`. (`PatientContact`, `MedicalHistoryEntry`,
+  `PatientDocument` remain planned — see Future.)
+- **Important workflows** — register a patient; search by name/phone/email;
+  edit; soft-deactivate and reactivate. Deduplication and document attachment
+  remain planned.
+- **Current status** — **Done** (core CRUD). `services/patients/` is the
+  reference implementation the remaining modules copy: `schema.ts`,
+  `rules.ts` (`calculateAge`, `initialsFor`), `queries.ts`, `commands.ts`,
+  `index.ts`. UI lives at `app/(dashboard)/patients/` — list (search +
+  active/inactive filter + empty state), detail, add, edit. Covered by
+  `tests/patients.test.ts` (rules, tenant isolation, command audit trail).
+- **Future** — patient-facing portal, consent capture, document OCR,
+  duplicate detection, `PatientContact`/`MedicalHistoryEntry`/`PatientDocument`.
 
 ### 2. Appointments
 
@@ -519,8 +525,11 @@ no-op in `vitest.config.mts`: that package throws unless the resolver picks its
       membership.
 - [x] **Visual design system** — deep navy / blue-gray palette in oklch, brand
       mark, auth layout, shared form primitives.
-- [ ] **Application shell** — sidebar, Organization Pulse, assistant panel.
-- [ ] **Patient module**
+- [x] **Application shell** — desktop sidebar + mobile drawer (shared
+      `NAV_ITEMS`/`NavLinks`), Organization Pulse home page. The assistant
+      panel is still deferred to the AI agent step: a third column with
+      nothing to render would itself be a half-finished state.
+- [x] **Patient module**
 - [ ] **Appointment module**
 - [ ] **Billing module**
 - [ ] **Reminder system**
@@ -872,6 +881,51 @@ the provider rejects a transcript where those turns are missing. It is now a uni
 including an assistant turn with `toolCalls` and a `tool` result turn, mapped in
 `gemini.ts` to Gemini's `functionCall` / `functionResponse` parts. Gemini does not
 always populate a call `id`, so results are correlated by name and position.
+
+### 2026-09-23 — The nav list only links to modules that exist
+
+`components/layout/nav-config.ts` (`NAV_ITEMS`) starts with two entries: Home
+and Patients. It was tempting to lay out the full nine-module sidebar now, with
+the unbuilt entries pointing at pages that don't exist yet or rendering a
+"coming soon" placeholder — but a nav link to an unbuilt page is exactly the
+half-finished state the project avoids elsewhere. `NAV_ITEMS` grows by one
+entry in the same commit that ships the page it points to, so the sidebar is
+never lying about what the product can currently do. `NavLinks` is one
+component shared by the desktop sidebar and the mobile sheet, so the two
+cannot show different link sets.
+
+### 2026-09-23 — Organization Pulse grows a tile per shipped module
+
+The home page (`app/(dashboard)/home/page.tsx`) reads directly through
+`services/patients` rather than through a new `services/dashboard/` — a
+single-module dashboard has no cross-module aggregation to justify a service
+of its own yet. It shows active-patient count and the five most recent
+patients, and nothing for appointments, billing or inventory, because those
+services don't exist yet to answer the question. The alternative — placeholder
+tiles reading "0" for modules with no data model wired up — would look
+identical to an empty state while meaning something different ("nobody has
+used this" vs. "this cannot be used yet"), which is precisely the distinction
+empty states exist to preserve. Revisit as a dedicated dashboard query only
+once enough modules exist that reading each one's service directly, in
+parallel, stops being the simplest thing that works.
+
+### 2026-09-23 — Tenant-scoped writes carry `organizationId` in `where`, not just as a precondition
+
+`services/patients/commands.ts` originally called `getPatientOrThrow(ctx, id)`
+to confirm tenancy, then wrote with `unit.db.patient.update({ where: { id },
+... })` — id alone. The tenant tripwire refused it
+(`tests/patients.test.ts` caught this the first time the command test ran):
+correctly, because the *write* itself carried no tenant filter, only the read
+that preceded it did. A future refactor that removed or reordered the
+precondition check would have silently reopened a cross-tenant write with
+nothing left to catch it.
+
+The fix, and the pattern every later module's commands should copy: the
+existence check stays (it turns "wrong tenant" into a clean `NotFoundError`
+instead of a `TenantScopeError` 500), but the write's own `where` is built with
+`orgWhere(ctx, { id })` regardless. Belt and suspenders is the point — the
+precondition is for the error message, the scoped write is the actual
+guarantee.
 
 ---
 

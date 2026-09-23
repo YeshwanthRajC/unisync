@@ -9,7 +9,7 @@ decisions the user made, and the traps already paid for.
 
 ## Where the project is
 
-Steps 1–3 of a 14-step plan are done. The plan lives at
+Steps 1–5 of a 14-step plan are done. The plan lives at
 `~/.claude/plans/pasted-content-id-418c-unisync-prancy-dawn.md`.
 
 | # | Step | State |
@@ -17,9 +17,9 @@ Steps 1–3 of a 14-step plan are done. The plan lives at
 | 1 | Server foundation | done |
 | 2 | Domain schema, RLS, seed | done |
 | 3 | Auth, onboarding, design system | done |
-| 4 | **App shell — sidebar, Organization Pulse, Ask UniSync panel** | **next** |
-| 5 | Patients (the reference module the rest copy) | |
-| 6 | Appointments + calendar + manual closure | |
+| 4 | App shell — sidebar, Organization Pulse | done (Ask UniSync panel deferred to step 12, by design — see CLAUDE.md) |
+| 5 | Patients (the reference module the rest copy) | done |
+| 6 | **Appointments + calendar + manual closure** | **next** |
 | 7 | Consultations + prescriptions | |
 | 8 | Billing + manual payment confirmation | |
 | 9 | Inventory + stock movements | |
@@ -29,8 +29,13 @@ Steps 1–3 of a 14-step plan are done. The plan lives at
 | 13 | Notifications, Activity, Reports, Settings, ⌘K | |
 | 14 | Responsive, a11y, performance, security, docs | |
 
-**Verification status:** 61 Vitest tests pass; typecheck, lint and production
-build are clean; `/api/health` reports `ready`.
+**Verification status:** 67 Vitest tests pass; typecheck, lint and production
+build are clean; `/api/health` reports `ready`. The shell and Patients module
+were also walked live: signed up a fresh account through the real UI, onboarded
+a new organization, confirmed the empty states, added a patient, edited it,
+deactivated and reactivated it, and checked the mobile drawer nav — all against
+the real Supabase-backed dev database (the throwaway account and org were
+deleted afterward; the seeded `markspector@gmail.com` clinic is untouched).
 
 ## Live environment
 
