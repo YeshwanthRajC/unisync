@@ -16,8 +16,10 @@ import {
   APPOINTMENT_TYPE_LABELS,
   listAppointmentsForPatient,
 } from "@/services/appointments";
+import { listConsultationsForPatient } from "@/services/consultations";
 import { calculateAge, getPatientOrThrow, initialsFor } from "@/services/patients";
 import { getCurrentOrganization } from "@/services/organizations";
+import { listPrescriptionsForPatient } from "@/services/prescriptions";
 
 export async function generateMetadata({
   params,
@@ -40,18 +42,27 @@ export default async function PatientDetailPage({
 }: PageProps<"/patients/[id]">) {
   const { id } = await params;
   const ctx = await loadContext("patient.read");
-  const [patient, organization, appointments] = await Promise.all([
-    getPatientOrThrow(ctx, id),
-    getCurrentOrganization(ctx),
-    roleHasPermission(ctx.role, "appointment.read")
-      ? listAppointmentsForPatient(ctx, id)
-      : Promise.resolve([]),
-  ]);
+  const [patient, organization, appointments, consultations, prescriptions] =
+    await Promise.all([
+      getPatientOrThrow(ctx, id),
+      getCurrentOrganization(ctx),
+      roleHasPermission(ctx.role, "appointment.read")
+        ? listAppointmentsForPatient(ctx, id)
+        : Promise.resolve([]),
+      roleHasPermission(ctx.role, "consultation.read")
+        ? listConsultationsForPatient(ctx, id)
+        : Promise.resolve([]),
+      roleHasPermission(ctx.role, "prescription.read")
+        ? listPrescriptionsForPatient(ctx, id)
+        : Promise.resolve([]),
+    ]);
 
   const age = calculateAge(patient.dateOfBirth);
   const canEdit = roleHasPermission(ctx.role, "patient.update");
   const canDeactivate = roleHasPermission(ctx.role, "patient.delete");
   const canScheduleAppointment = roleHasPermission(ctx.role, "appointment.create");
+  const canRecordConsultation = roleHasPermission(ctx.role, "consultation.create");
+  const canIssuePrescription = roleHasPermission(ctx.role, "prescription.create");
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-8">
@@ -189,6 +200,86 @@ export default async function PatientDetailPage({
                       · {APPOINTMENT_TYPE_LABELS[appointment.type]}
                     </Link>
                     <AppointmentStatusBadge status={appointment.status} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="sm:col-span-2">
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle>Consultations</CardTitle>
+            {canRecordConsultation ? (
+              <Button asChild size="sm" variant="outline">
+                <Link href={{ pathname: "/consultations/new", query: { patientId: patient.id } }}>
+                  <PlusIcon aria-hidden="true" />
+                  Record
+                </Link>
+              </Button>
+            ) : null}
+          </CardHeader>
+          <CardContent className="text-sm">
+            {consultations.length === 0 ? (
+              <p className="text-muted-foreground">No consultations recorded yet.</p>
+            ) : (
+              <ul className="divide-y">
+                {consultations.map((consultation) => (
+                  <li key={consultation.id} className="flex items-center justify-between gap-3 py-2">
+                    <Link
+                      href={`/consultations/${consultation.id}`}
+                      className="hover:underline underline-offset-4"
+                    >
+                      {new Intl.DateTimeFormat("en-IN", {
+                        timeZone: organization.timezone,
+                        day: "numeric",
+                        month: "short",
+                        year: "numeric",
+                      }).format(consultation.consultedAt)}
+                      {consultation.diagnosis ? ` · ${consultation.diagnosis}` : ""}
+                    </Link>
+                    {consultation.followUpNeeded ? (
+                      <Badge variant="outline">Follow-up needed</Badge>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="sm:col-span-2">
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle>Prescriptions</CardTitle>
+            {canIssuePrescription ? (
+              <Button asChild size="sm" variant="outline">
+                <Link href={{ pathname: "/prescriptions/new", query: { patientId: patient.id } }}>
+                  <PlusIcon aria-hidden="true" />
+                  Issue
+                </Link>
+              </Button>
+            ) : null}
+          </CardHeader>
+          <CardContent className="text-sm">
+            {prescriptions.length === 0 ? (
+              <p className="text-muted-foreground">No prescriptions issued yet.</p>
+            ) : (
+              <ul className="divide-y">
+                {prescriptions.map((prescription) => (
+                  <li key={prescription.id} className="flex items-center justify-between gap-3 py-2">
+                    <Link
+                      href={`/prescriptions/${prescription.id}`}
+                      className="hover:underline underline-offset-4"
+                    >
+                      {new Intl.DateTimeFormat("en-IN", {
+                        timeZone: organization.timezone,
+                        day: "numeric",
+                        month: "short",
+                        year: "numeric",
+                      }).format(prescription.issuedAt)}{" "}
+                      · {prescription.items.length}{" "}
+                      {prescription.items.length === 1 ? "medicine" : "medicines"}
+                    </Link>
                   </li>
                 ))}
               </ul>

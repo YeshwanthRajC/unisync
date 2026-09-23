@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ChevronLeftIcon, PencilIcon } from "lucide-react";
+import { ChevronLeftIcon, PencilIcon, StethoscopeIcon } from "lucide-react";
 
 import { AppointmentStatusBadge } from "@/app/(dashboard)/appointments/status-badge";
 import {
@@ -20,6 +20,7 @@ import {
   getAppointmentOrThrow,
   isEditable,
 } from "@/services/appointments";
+import { getConsultationForAppointment } from "@/services/consultations";
 import { getCurrentOrganization } from "@/services/organizations";
 
 export async function generateMetadata({
@@ -36,14 +37,18 @@ export default async function AppointmentDetailPage({
 }: PageProps<"/appointments/[id]">) {
   const { id } = await params;
   const ctx = await loadContext("appointment.read");
-  const [appointment, organization] = await Promise.all([
+  const [appointment, organization, existingConsultation] = await Promise.all([
     getAppointmentOrThrow(ctx, id),
     getCurrentOrganization(ctx),
+    roleHasPermission(ctx.role, "consultation.read")
+      ? getConsultationForAppointment(ctx, id)
+      : null,
   ]);
 
   const canUpdate = roleHasPermission(ctx.role, "appointment.update");
   const canCancel = roleHasPermission(ctx.role, "appointment.cancel");
   const canClose = roleHasPermission(ctx.role, "appointment.close");
+  const canRecordConsultation = roleHasPermission(ctx.role, "consultation.create");
 
   const dateTime = new Intl.DateTimeFormat("en-IN", {
     timeZone: organization.timezone,
@@ -82,14 +87,36 @@ export default async function AppointmentDetailPage({
           </p>
         </div>
 
-        {canUpdate && isEditable(appointment.status) ? (
-          <Button asChild variant="outline" size="sm">
-            <Link href={`/appointments/${appointment.id}/edit`}>
-              <PencilIcon aria-hidden="true" />
-              Edit
-            </Link>
-          </Button>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {existingConsultation ? (
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/consultations/${existingConsultation.id}`}>
+                <StethoscopeIcon aria-hidden="true" />
+                View consultation
+              </Link>
+            </Button>
+          ) : canRecordConsultation ? (
+            <Button asChild variant="outline" size="sm">
+              <Link
+                href={{
+                  pathname: "/consultations/new",
+                  query: { patientId: appointment.patient.id, appointmentId: appointment.id },
+                }}
+              >
+                <StethoscopeIcon aria-hidden="true" />
+                Record consultation
+              </Link>
+            </Button>
+          ) : null}
+          {canUpdate && isEditable(appointment.status) ? (
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/appointments/${appointment.id}/edit`}>
+                <PencilIcon aria-hidden="true" />
+                Edit
+              </Link>
+            </Button>
+          ) : null}
+        </div>
       </header>
 
       {appointment.notes ? (
