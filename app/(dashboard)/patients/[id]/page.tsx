@@ -1,17 +1,23 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ChevronLeftIcon, PencilIcon } from "lucide-react";
+import { ChevronLeftIcon, PencilIcon, PlusIcon } from "lucide-react";
 
 import {
   deactivatePatientAction,
   reactivatePatientAction,
 } from "@/app/(dashboard)/patients/actions";
+import { AppointmentStatusBadge } from "@/app/(dashboard)/appointments/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { roleHasPermission } from "@/lib/auth/permissions";
 import { loadContext } from "@/lib/server/guard";
+import {
+  APPOINTMENT_TYPE_LABELS,
+  listAppointmentsForPatient,
+} from "@/services/appointments";
 import { calculateAge, getPatientOrThrow, initialsFor } from "@/services/patients";
+import { getCurrentOrganization } from "@/services/organizations";
 
 export async function generateMetadata({
   params,
@@ -34,11 +40,18 @@ export default async function PatientDetailPage({
 }: PageProps<"/patients/[id]">) {
   const { id } = await params;
   const ctx = await loadContext("patient.read");
-  const patient = await getPatientOrThrow(ctx, id);
+  const [patient, organization, appointments] = await Promise.all([
+    getPatientOrThrow(ctx, id),
+    getCurrentOrganization(ctx),
+    roleHasPermission(ctx.role, "appointment.read")
+      ? listAppointmentsForPatient(ctx, id)
+      : Promise.resolve([]),
+  ]);
 
   const age = calculateAge(patient.dateOfBirth);
   const canEdit = roleHasPermission(ctx.role, "patient.update");
   const canDeactivate = roleHasPermission(ctx.role, "patient.delete");
+  const canScheduleAppointment = roleHasPermission(ctx.role, "appointment.create");
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-8">
@@ -137,6 +150,48 @@ export default async function PatientDetailPage({
               <p className="whitespace-pre-wrap">{patient.notes}</p>
             ) : (
               <p className="text-muted-foreground">No notes on file.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="sm:col-span-2">
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle>Appointments</CardTitle>
+            {canScheduleAppointment ? (
+              <Button asChild size="sm" variant="outline">
+                <Link href={{ pathname: "/appointments/new", query: { patientId: patient.id } }}>
+                  <PlusIcon aria-hidden="true" />
+                  Schedule
+                </Link>
+              </Button>
+            ) : null}
+          </CardHeader>
+          <CardContent className="text-sm">
+            {appointments.length === 0 ? (
+              <p className="text-muted-foreground">No appointments yet.</p>
+            ) : (
+              <ul className="divide-y">
+                {appointments.map((appointment) => (
+                  <li key={appointment.id} className="flex items-center justify-between gap-3 py-2">
+                    <Link
+                      href={`/appointments/${appointment.id}`}
+                      className="hover:underline underline-offset-4"
+                    >
+                      {new Intl.DateTimeFormat("en-IN", {
+                        timeZone: organization.timezone,
+                        day: "numeric",
+                        month: "short",
+                        year: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                        hour12: true,
+                      }).format(appointment.scheduledAt)}{" "}
+                      · {APPOINTMENT_TYPE_LABELS[appointment.type]}
+                    </Link>
+                    <AppointmentStatusBadge status={appointment.status} />
+                  </li>
+                ))}
+              </ul>
             )}
           </CardContent>
         </Card>

@@ -9,7 +9,7 @@ decisions the user made, and the traps already paid for.
 
 ## Where the project is
 
-Steps 1–5 of a 14-step plan are done. The plan lives at
+Steps 1–6 of a 14-step plan are done. The plan lives at
 `~/.claude/plans/pasted-content-id-418c-unisync-prancy-dawn.md`.
 
 | # | Step | State |
@@ -19,8 +19,8 @@ Steps 1–5 of a 14-step plan are done. The plan lives at
 | 3 | Auth, onboarding, design system | done |
 | 4 | App shell — sidebar, Organization Pulse | done (Ask UniSync panel deferred to step 12, by design — see CLAUDE.md) |
 | 5 | Patients (the reference module the rest copy) | done |
-| 6 | **Appointments + calendar + manual closure** | **next** |
-| 7 | Consultations + prescriptions | |
+| 6 | Appointments + calendar + manual closure | done — the first manual gate (`closeAppointment`) built and verified end to end |
+| 7 | **Consultations + prescriptions** | **next** |
 | 8 | Billing + manual payment confirmation | |
 | 9 | Inventory + stock movements | |
 | 10 | Follow-ups + cron | |
@@ -29,13 +29,15 @@ Steps 1–5 of a 14-step plan are done. The plan lives at
 | 13 | Notifications, Activity, Reports, Settings, ⌘K | |
 | 14 | Responsive, a11y, performance, security, docs | |
 
-**Verification status:** 67 Vitest tests pass; typecheck, lint and production
-build are clean; `/api/health` reports `ready`. The shell and Patients module
-were also walked live: signed up a fresh account through the real UI, onboarded
-a new organization, confirmed the empty states, added a patient, edited it,
-deactivated and reactivated it, and checked the mobile drawer nav — all against
-the real Supabase-backed dev database (the throwaway account and org were
-deleted afterward; the seeded `markspector@gmail.com` clinic is untouched).
+**Verification status:** 77 Vitest tests pass; typecheck, lint and production
+build are clean; `/api/health` reports `ready`. Everything through Appointments
+was also walked live in the browser against a throwaway sign-up (deleted
+afterward; the seeded `markspector@gmail.com` clinic is untouched): onboarding
+and empty states, adding/editing/deactivating a patient, scheduling an
+appointment, and the full status lifecycle — confirm, then close through the
+manual-gate form, with the outcome notes and the "Completed" status landing
+correctly on both the appointment page and the patient's own Appointments
+card.
 
 ## Live environment
 

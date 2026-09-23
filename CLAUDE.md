@@ -7,10 +7,12 @@
 > implementation decision. A decision that is not written down here has not
 > been made.
 
-**Last updated:** 2026-09-23 — application shell (sidebar, Organization Pulse) and
-the Patients module shipped end to end and verified in the browser against a
-fresh sign-up. See [`docs/handoff.md`](docs/handoff.md) for current state and
-the traps already paid for.
+**Last updated:** 2026-09-23 — the Appointments module shipped, including the
+first manual gate (`closeAppointment`) built and verified end to end: the
+`HumanIntent` type-level guarantee, the database `CHECK` constraint, and the
+real UI flow, all walked live in the browser. See
+[`docs/handoff.md`](docs/handoff.md) for current state and the traps already
+paid for.
 
 ---
 
@@ -76,14 +78,33 @@ Status legend: **Not started** · **Scaffolded** · **In progress** · **Done**
 
 ### 2. Appointments
 
-- **Purpose** — Scheduling of patient visits against finite resources
-  (practitioners, chairs, rooms).
-- **Main entities** *(planned)* — `Appointment`, `Practitioner`, `Resource`,
-  `AvailabilityRule`.
-- **Important workflows** *(planned)* — find available slots; book;
-  reschedule; cancel; no-show handling; day and week calendar views.
-- **Current status** — **Not started.**
-- **Future** — online self-booking, waitlist auto-fill on cancellation.
+- **Purpose** — Scheduling of patient visits. No practitioner/chair/room
+  modelling — see "No practitioner or doctor entity" above.
+- **Main entities** — `Appointment`.
+- **Important workflows** — schedule; edit while still open; confirm; start;
+  cancel (with a reason); mark no-show; **close** (the manual gate — see
+  below). Day-view calendar with previous/today/next navigation, correct
+  across the organization's timezone.
+- **Current status** — **Done** (core workflow). `services/appointments/`
+  follows the same five-file shape as patients, plus a state machine in
+  `rules.ts` (`canTransition`, `isEditable`) and the timezone conversions a
+  `scheduledAt` needs (`zonedTimeToUtc`, `utcToZonedInputValue`,
+  `dayBoundsInZone`). UI at `app/(dashboard)/appointments/`. The patient
+  detail page shows a patient's appointments and a "Schedule" shortcut; the
+  Organization Pulse gained an "Appointments left today" tile. Covered by
+  `tests/appointments.test.ts`, including a raw-SQL check that the database
+  itself refuses a `COMPLETED` row with no closer.
+- **Future** — week view, online self-booking, waitlist auto-fill on
+  cancellation, double-booking prevention.
+
+**The manual gate, built for the first time here.** `closeAppointment`
+requires a `HumanIntent`, mintable only inside `lib/server/action.ts`. The
+only UI path to it is `CloseAppointmentForm`
+(`app/(dashboard)/appointments/close-appointment-form.tsx`), which always
+requires the visit's outcome to be written down. Every other status change
+(confirm, start, no-show, cancel) is an ordinary permission-gated write with
+no such requirement — the distinction is deliberate: those are logistics, not
+a clinical judgement about what happened.
 
 ### 3. Billing & Payments
 
@@ -530,7 +551,8 @@ no-op in `vitest.config.mts`: that package throws unless the resolver picks its
       panel is still deferred to the AI agent step: a third column with
       nothing to render would itself be a half-finished state.
 - [x] **Patient module**
-- [ ] **Appointment module**
+- [x] **Appointment module** — including the manual close gate, built and
+      verified end to end (type system, database `CHECK`, real UI flow).
 - [ ] **Billing module**
 - [ ] **Reminder system**
 - [ ] **Inventory module**
@@ -926,6 +948,32 @@ instead of a `TenantScopeError` 500), but the write's own `where` is built with
 `orgWhere(ctx, { id })` regardless. Belt and suspenders is the point — the
 precondition is for the error message, the scoped write is the actual
 guarantee.
+
+### 2026-09-23 — A Client Component must import a service's leaf files, not its barrel
+
+`app/(dashboard)/appointments/appointment-form.tsx` (`"use client"`) imported
+`APPOINTMENT_TYPE_LABELS` from `@/services/appointments` — the module's public
+barrel — and the production build failed trying to bundle `pg` and Node's
+`net`/`tls` for the browser.
+
+The cause: `services/appointments/index.ts` re-exports from `commands.ts` and
+`queries.ts` too, and both start with `import "server-only"`. That import is a
+side effect, and a bundler cannot drop a module with a side effect just
+because a particular caller ends up using none of its exports — so pulling
+*anything* through the barrel drags the whole module graph, Prisma included,
+into the client bundle. `server-only` then fires exactly as designed, except
+here the failure surfaced as a Node-builtin resolution error deep in `pg`
+rather than the intended "cannot be imported from a Client Component" message,
+because Turbopack hit the unresolvable import before evaluation.
+
+The fix: a Client Component imports constants and types from the specific leaf
+file that has no `"server-only"` guard — `services/appointments/schema.ts`,
+`services/appointments/rules.ts` — never from the barrel. `status-badge.tsx`
+imports the same constants from the barrel and is fine, because it is itself a
+Server Component; the barrel is only unsafe across the client boundary. This
+is the same reason `patient-form.tsx` never imported from `@/services/patients`
+at all — it never needed to, which is worth noting explicitly now that a
+counterexample exists.
 
 ---
 

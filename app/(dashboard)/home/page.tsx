@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { UsersIcon } from "lucide-react";
+import { CalendarDaysIcon, UsersIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { loadContext } from "@/lib/server/guard";
+import { countUpcomingToday } from "@/services/appointments";
 import { getCurrentOrganization } from "@/services/organizations";
 import {
   calculateAge,
@@ -30,6 +31,7 @@ export default async function HomePage() {
     countActivePatients(ctx),
     listRecentPatients(ctx, 5),
   ]);
+  const upcomingToday = await countUpcomingToday(ctx, organization.timezone);
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-8">
@@ -42,8 +44,8 @@ export default async function HomePage() {
         </p>
       </header>
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Link href="/patients" className="sm:col-span-1">
+      <div className="mb-4 grid gap-4 sm:grid-cols-2">
+        <Link href="/patients">
           <Card className="h-full transition-shadow hover:shadow-sm">
             <CardHeader>
               <CardTitle className="text-muted-foreground flex items-center gap-2 text-sm font-medium">
@@ -59,46 +61,62 @@ export default async function HomePage() {
           </Card>
         </Link>
 
-        <Card className="sm:col-span-2">
-          <CardHeader>
-            <CardTitle className="text-base">Recently added patients</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {recentPatients.length === 0 ? (
-              <p className="text-muted-foreground text-sm">
-                No patients yet.{" "}
-                <Link
-                  href="/patients/new"
-                  className="text-foreground underline underline-offset-4"
-                >
-                  Add your first one
-                </Link>
-                .
+        <Link href="/appointments">
+          <Card className="h-full transition-shadow hover:shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-muted-foreground flex items-center gap-2 text-sm font-medium">
+                <CalendarDaysIcon className="size-4" aria-hidden="true" />
+                Appointments left today
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="font-heading text-3xl font-semibold">
+                {upcomingToday}
               </p>
-            ) : (
-              <ul className="divide-y">
-                {recentPatients.map((patient) => {
-                  const age = calculateAge(patient.dateOfBirth);
-                  return (
-                    <li key={patient.id} className="flex items-center justify-between py-2 text-sm">
-                      <Link
-                        href={`/patients/${patient.id}`}
-                        className="font-medium hover:underline underline-offset-4"
-                      >
-                        {patient.fullName}
-                      </Link>
-                      <span className="text-muted-foreground flex items-center gap-2">
-                        {age !== null ? <Badge variant="outline">{age}y</Badge> : null}
-                        {patient.phone ?? "—"}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </Link>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Recently added patients</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {recentPatients.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              No patients yet.{" "}
+              <Link
+                href="/patients/new"
+                className="text-foreground underline underline-offset-4"
+              >
+                Add your first one
+              </Link>
+              .
+            </p>
+          ) : (
+            <ul className="divide-y">
+              {recentPatients.map((patient) => {
+                const age = calculateAge(patient.dateOfBirth);
+                return (
+                  <li key={patient.id} className="flex items-center justify-between py-2 text-sm">
+                    <Link
+                      href={`/patients/${patient.id}`}
+                      className="font-medium hover:underline underline-offset-4"
+                    >
+                      {patient.fullName}
+                    </Link>
+                    <span className="text-muted-foreground flex items-center gap-2">
+                      {age !== null ? <Badge variant="outline">{age}y</Badge> : null}
+                      {patient.phone ?? "—"}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

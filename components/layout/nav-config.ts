@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { HomeIcon, UsersIcon } from "lucide-react";
+import { CalendarDaysIcon, HomeIcon, UsersIcon } from "lucide-react";
 
 import type { Permission } from "@/lib/auth/permissions";
 
@@ -25,4 +25,10 @@ export type NavItem = {
 export const NAV_ITEMS: readonly NavItem[] = [
   { href: "/home", label: "Home", icon: HomeIcon, permission: "organization.read" },
   { href: "/patients", label: "Patients", icon: UsersIcon, permission: "patient.read" },
+  {
+    href: "/appointments",
+    label: "Appointments",
+    icon: CalendarDaysIcon,
+    permission: "appointment.read",
+  },
 ];
