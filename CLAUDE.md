@@ -7,9 +7,9 @@
 > implementation decision. A decision that is not written down here has not
 > been made.
 
-**Last updated:** 2026-09-23 — domain schema applied (20 tables), manual-gate
-CHECK constraints and RLS lockdown verified at the database, development seed
-written.
+**Last updated:** 2026-09-23 — authentication, organization onboarding and the
+visual design system landed. Sign-up, sign-in, password reset and the email
+confirmation callback all work against live Supabase Auth.
 
 ---
 
@@ -511,10 +511,14 @@ no-op in `vitest.config.mts`: that package throws unless the resolver picks its
       transaction envelope, tenant scoping + tripwire, `HumanIntent` gate, action
       / route / RSC guard wrappers, `defineTool` factory with Zod-derived tool
       schemas, ESLint architectural boundaries, Vitest with 45 tests.
-- [ ] **Authentication** — sign-up, sign-in, sign-out, `(auth)` routes, and
-      `Profile` provisioning on first login.
-- [ ] **Organization setup** — create an organization, invite members, switch
-      the active organization, first migration applied.
+- [x] **Authentication** — sign-up, sign-in, sign-out, password reset, the
+      email-confirmation callback, and `Profile` provisioning on first
+      authenticated request.
+- [x] **Organization setup** — onboarding creates the organization and an OWNER
+      membership.
+- [x] **Visual design system** — deep navy / blue-gray palette in oklch, brand
+      mark, auth layout, shared form primitives.
+- [ ] **Application shell** — sidebar, Organization Pulse, assistant panel.
 - [ ] **Patient module**
 - [ ] **Appointment module**
 - [ ] **Billing module**
@@ -732,6 +736,57 @@ visible direction, telling the model a field is optional while Zod requires it, 
 the agent loops on arguments that can never parse and simply appears stupid.
 Unions, `.refine`, `.transform` and `z.date()` are unrepresentable by design;
 constraints go in `.describe()` prose, which the registry requires on every field.
+
+### 2026-09-23 — Authentication messages never reveal whether an account exists
+
+Sign-in returns one message — *"That email or password is not correct."* — for
+both an unknown address and a wrong password, and the password-reset form reports
+success whatever the outcome. Distinguishing them turns either form into an
+account-enumeration oracle: anyone could discover which addresses are registered
+with a clinic, which is itself patient information.
+
+Rate limiting is still surfaced, because a user who has hit a limit needs to know
+to wait rather than assuming the product is broken.
+
+### 2026-09-23 — `Profile` provisioning on first authenticated request
+
+`Profile` mirrors a Supabase Auth user by the same UUID, and nothing creates that
+row automatically — without it a confirmed user is authenticated yet invisible to
+every query. `ensureProfile()` upserts it from `lib/server/guard.ts`, so it covers
+password sign-in, the email-confirmation callback and any future OAuth path alike,
+and is wrapped in React `cache()` so a page that guards in its layout and three
+components performs one upsert rather than four.
+
+A Postgres trigger on `auth.users` was rejected: it would live outside the
+migration history Prisma manages, cannot be typechecked, and fires for
+service-role inserts too.
+
+### 2026-09-23 — `NoOrganizationError` distinguishes onboarding from refusal
+
+"You may not do that" and "you have not created your clinic yet" need completely
+different responses, but both were `AuthorizationError`. `NoOrganizationError`
+subclasses it — so every existing catch and the error-mapping table keep working
+unchanged — and the guard routes it to `/onboarding` instead of `/no-access`.
+Without the distinction, every brand-new user's first experience would be a dead
+end.
+
+### 2026-09-23 — Auth and onboarding actions bypass the `action()` wrapper
+
+`action()` resolves a session and asserts a permission before doing anything,
+which is exactly what cannot exist while somebody is signing in or creating their
+first organization. Reusing it would have meant adding a "no permission required"
+escape hatch to the one wrapper where the permission check matters most. These
+actions therefore validate and map errors themselves, and are the only writes that
+do. `createOrganizationForUser` is likewise the single documented exception to
+`runCommand`: it cannot take an `OrganizationContext`, because the context is the
+*result* of the operation.
+
+### 2026-09-23 — `/auth/callback` only honours same-origin redirects
+
+The `next` parameter arrives in an emailed link and is therefore
+attacker-influenced. Accepting an absolute URL would make the endpoint an open
+redirect that bounces a freshly authenticated user to another site. Only a single
+leading slash is accepted, and `//` (protocol-relative) is rejected.
 
 ### 2026-09-23 — `AiMessage` widened to carry tool calls and results
 

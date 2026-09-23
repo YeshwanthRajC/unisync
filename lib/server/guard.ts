@@ -2,9 +2,19 @@ import "server-only";
 
 import { redirect } from "next/navigation";
 
-import { AuthenticationError, AuthorizationError } from "@/lib/auth/errors";
+import {
+  AuthenticationError,
+  AuthorizationError,
+  NoOrganizationError,
+} from "@/lib/auth/errors";
 import type { Permission } from "@/lib/auth/permissions";
-import { requirePermission, type OrganizationContext } from "@/lib/auth/session";
+import { ensureProfile } from "@/lib/auth/provision";
+import {
+  requireOrganizationContext,
+  requirePermission,
+  requireUser,
+  type OrganizationContext,
+} from "@/lib/auth/session";
 
 /**
  * Guard for Server Components, which have no return channel for an error.
@@ -20,19 +30,60 @@ import { requirePermission, type OrganizationContext } from "@/lib/auth/session"
  * redirect and a rendered no-access route need no experimental flag and are
  * indistinguishable to the user.
  */
+
+/** Signed in, with a provisioned Profile. Nothing about organizations yet. */
+export async function loadUser() {
+  try {
+    const user = await requireUser();
+    // First authenticated request after sign-up or email confirmation: this is
+    // where the user becomes visible to the rest of the application.
+    await ensureProfile(user);
+    return user;
+  } catch (error) {
+    if (error instanceof AuthenticationError) redirect("/sign-in");
+    throw error;
+  }
+}
+
+/**
+ * Signed in AND a member of an organization, with a permission asserted.
+ *
+ * The three redirects are deliberately different outcomes:
+ *   - not signed in      -> sign in
+ *   - no organization    -> create one (an onboarding step, not a refusal)
+ *   - insufficient rights -> no access
+ */
 export async function loadContext(
   permission: Permission,
 ): Promise<OrganizationContext> {
+  await loadUser();
+
   try {
     return await requirePermission(permission);
   } catch (error) {
-    if (error instanceof AuthenticationError) {
-      redirect("/sign-in");
-    }
-    if (error instanceof AuthorizationError) {
-      // Signed in, but a member of no organization (or of a different one).
-      redirect("/no-access");
-    }
+    // Must be tested before AuthorizationError: it is a subclass.
+    if (error instanceof NoOrganizationError) redirect("/onboarding");
+    if (error instanceof AuthenticationError) redirect("/sign-in");
+    if (error instanceof AuthorizationError) redirect("/no-access");
+    throw error;
+  }
+}
+
+/**
+ * Organization context without asserting a specific permission.
+ *
+ * For the shell — the sidebar needs the organization's name before it knows
+ * which page the user is heading to.
+ */
+export async function loadOrganization(): Promise<OrganizationContext> {
+  await loadUser();
+
+  try {
+    return await requireOrganizationContext();
+  } catch (error) {
+    if (error instanceof NoOrganizationError) redirect("/onboarding");
+    if (error instanceof AuthenticationError) redirect("/sign-in");
+    if (error instanceof AuthorizationError) redirect("/no-access");
     throw error;
   }
 }

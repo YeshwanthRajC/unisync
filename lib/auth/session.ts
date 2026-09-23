@@ -5,7 +5,11 @@ import type { User } from "@supabase/supabase-js";
 
 import { prisma } from "@/lib/db/prisma";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { AuthenticationError, AuthorizationError } from "@/lib/auth/errors";
+import {
+  AuthenticationError,
+  AuthorizationError,
+  NoOrganizationError,
+} from "@/lib/auth/errors";
 import { roleHasPermission, type Permission } from "@/lib/auth/permissions";
 import type { MembershipRole } from "@/lib/db/generated/enums";
 
@@ -68,9 +72,10 @@ export const requireOrganizationContext = cache(
     });
 
     if (memberships.length === 0) {
-      throw new AuthorizationError(
-        "Your account does not belong to any organization yet.",
-      );
+      // Distinct from "you may not do that": this user needs to create their
+      // organization, which is an onboarding step rather than a refusal. The
+      // guard routes the two outcomes to different places.
+      throw new NoOrganizationError();
     }
 
     const membership = organizationId
