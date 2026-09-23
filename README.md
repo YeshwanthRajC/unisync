@@ -9,9 +9,10 @@ The first version is modeled around a **dental clinic**, but the architecture
 is multi-tenant and organization-type aware so other kinds of small
 organization can be supported later.
 
-> **Status: foundation only.** The development environment, database schema for
-> tenancy, auth plumbing, and the AI abstraction layer are in place. No
-> business modules are implemented yet.
+> **Status: server foundation and database complete.** The full domain schema
+> (20 tables), the audited command layer, tenant isolation, the AI tool
+> contract, and the manual-gate constraints are in place and tested. The user
+> interface and the module service layers are being built now.
 
 For the deeper engineering context — architecture, data model, AI safety
 rules, and the record of why things were built this way — see
@@ -80,11 +81,19 @@ therefore public. Never give a secret one of those names.
 Once `DIRECT_URL` points at your Supabase project:
 
 ```bash
-npm run db:migrate    # create and apply the first migration
+npx prisma migrate deploy    # apply all migrations
 ```
 
-For quick local iteration without a migration file, `npm run db:push` works
-too. Use `npm run db:studio` to browse the data.
+`prisma migrate dev` is interactive and does not run in every environment. To
+create a new migration, generate the SQL and apply it:
+
+```bash
+npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script
+```
+
+Write that into `prisma/migrations/<timestamp>_<name>/migration.sql`, add
+anything Prisma cannot express (`CHECK` constraints, row-level security), then
+run `npx prisma migrate deploy`. Use `npm run db:studio` to browse the data.
 
 ## Run it
 
@@ -108,6 +117,7 @@ npm run db:generate  # regenerate the Prisma client
 npm run db:migrate   # create + apply a migration
 npm run db:push      # push schema without a migration (dev only)
 npm run db:studio    # browse the database
+npm run db:seed      # sample clinic (dev only; pass your signup email)
 npm test             # Vitest, single run
 npm run test:watch   # Vitest, watch mode
 ```
@@ -132,22 +142,34 @@ lib/
     types.ts            provider-agnostic contract (no vendor SDK)
     gemini.ts           the only file that imports the Gemini SDK
     provider.ts         resolves the active provider
-    tools.ts            AI tool contract + registry (empty by design)
+    agent/schema.ts     derives tool declarations from Zod schemas
+    tools/define.ts     defineTool(): parse, erase the generic, invoke
+    tools/index.ts      the registry and its build-time safety assertions
   auth/
     session.ts          who is calling, in which organization
     permissions.ts      role to permission mapping
+    human-intent.ts     the token the AI layer cannot construct
     errors.ts           401 / 403 error types
+  server/
+    action.ts           Server Action wrapper; the only minter of HumanIntent
+    unit.ts             runCommand(): one transaction, one audit record
+    guard.ts            Server Component guard
+    route.ts            Route Handler error mapping
+    result.ts           ActionResult<T>, shared with the client
+    errors.ts           404 / 409 / 422 domain errors
   db/
     prisma.ts           the single PrismaClient in the codebase
+    scope.ts            orgScope() / orgWhere()
+    tenant-guard.ts     throws on any unscoped tenant query
     generated/          generated client (gitignored)
-  supabase/
-    client.ts           browser client
-    server.ts           server client + admin client
-    proxy.ts            session refresh helper
+  supabase/             browser, server and session-refresh clients
   env.ts                validated environment access
-  utils.ts              shadcn `cn` helper
+services/<module>/      business logic (schema, rules, queries, commands)
 prisma/
   schema.prisma         database schema
+  migrations/           tenancy, domain modules, RLS lockdown
+  seed.ts               development sample clinic
+tests/                  Vitest: permissions, tenancy, AI tool safety
 proxy.ts                runs per request; refreshes the Supabase session
 prisma.config.ts        Prisma CLI config (loads .env.local, direct DB URL)
 docs/                   longer-form design notes

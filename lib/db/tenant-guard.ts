@@ -23,16 +23,35 @@ import { Prisma } from "@/lib/db/generated/client";
 /**
  * Models carrying an `organizationId` column.
  *
- * `Organization` and `Profile` are intentionally absent: an Organization IS the
- * tenant, and a Profile is a Supabase Auth user who may belong to several.
+ * Three groups are intentionally absent:
+ *
+ *   - `Organization` IS the tenant, and `Profile` is a Supabase Auth user who
+ *     may belong to several, so neither can be filtered by one.
+ *   - `PrescriptionItem`, `BillItem` and `AIMessage` are child rows with no
+ *     independent existence. They are always reached through a parent that IS
+ *     scoped, and giving them a redundant organizationId would create a second
+ *     copy of the truth that could disagree with the first.
  *
  * Adding a tenant-scoped model without adding it here weakens the backstop, so
- * `tests/tenant-isolation.test.ts` asserts this set matches every model in the
- * Prisma schema that actually has an organizationId field.
+ * `tests/tenant-guard.test.ts` reads `prisma/schema.prisma` and asserts this set
+ * matches exactly the models that declare an organizationId field.
  */
 export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   "Membership",
   "AuditLog",
+  "Patient",
+  "Appointment",
+  "Consultation",
+  "Prescription",
+  "Bill",
+  "Payment",
+  "InventoryItem",
+  "StockMovement",
+  "FollowUp",
+  "PatientEmail",
+  "Notification",
+  "AIConversation",
+  "AIToolExecution",
 ]);
 
 /** Operations whose `where` must constrain the tenant. */

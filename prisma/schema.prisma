@@ -1,8 +1,33 @@
 // UniSync — Prisma schema
 //
-// Scope at this stage: multi-tenant foundation only.
-// Clinic domain models (patients, appointments, billing, reminders, inventory)
-// are intentionally NOT defined yet. See CLAUDE.md → Database Design.
+// Sections:
+//   1. Tenancy & identity      (Organization, Profile, Membership)
+//   2. Auditing                (AuditLog)
+//   3. Patients
+//   4. Appointments
+//   5. Clinical records        (Consultation, Prescription, PrescriptionItem)
+//   6. Billing                 (Bill, BillItem, Payment)
+//   7. Inventory               (InventoryItem, StockMovement)
+//   8. Follow-ups
+//   9. Patient mail
+//  10. Internal notifications
+//  11. AI assistant            (AIConversation, AIMessage, AIToolExecution)
+//
+// Conventions, applied without exception:
+//   - UUID primary keys (@db.Uuid).
+//   - snake_case table names via @@map; camelCase in TypeScript.
+//   - EVERY tenant-scoped table carries organizationId and is indexed on it.
+//     `lib/db/tenant-guard.ts` throws if a query on one omits that filter.
+//   - Money is Decimal(12,2). Never Float: binary floating point cannot
+//     represent 0.01, and a clinic's ledger must reconcile exactly.
+//   - Timestamps are UTC; the organization's IANA timezone governs display.
+//
+// THREE STATES ARE GUARDED BY DATABASE CHECK CONSTRAINTS, added by hand in the
+// migration (Prisma cannot express CHECK):
+//   - an appointment may not be COMPLETED without a human closer,
+//   - a payment may not be CONFIRMED without a human confirmer,
+//   - a patient email may not be SENT without a human sender.
+// See the "manual gates" decision in CLAUDE.md.
 
 generator client {
   provider = "prisma-client"
@@ -31,6 +56,11 @@ enum OrganizationType {
 
 /// Role of a user within one organization. Permissions are derived from the
 /// role on the server; the client is never trusted with this decision.
+///
+/// The product is designed around a single administrator who does everything,
+/// so in practice every real membership is OWNER. The other two exist because
+/// the permission layer — and the AI safety model built on it — needs a
+/// vocabulary richer than "the one user".
 enum MembershipRole {
   OWNER
   ADMIN
@@ -50,23 +80,159 @@ enum ActorType {
   SYSTEM
 }
 
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  UNDISCLOSED
+}
+
+/// Dental-clinic treatment categories.
+///
+/// An enum rather than free text: reports group by this, and free text
+/// fragments the same treatment across spellings. Adding a vertical means
+/// adding values here, which is one reviewable migration.
+enum AppointmentType {
+  CONSULTATION
+  CLEANING
+  FILLING
+  EXTRACTION
+  ROOT_CANAL
+  CROWN_OR_BRIDGE
+  ORTHODONTIC
+  FOLLOW_UP
+  EMERGENCY
+  OTHER
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+/// Lifecycle of the bill document itself.
+///
+/// Deliberately does NOT include PAID or PARTIALLY_PAID. How much has been paid
+/// is derived at read time from CONFIRMED payments, so a stored total can never
+/// drift from the ledger — and, more importantly, nothing can mark a bill paid
+/// as a side effect of creating a payment row.
+enum BillStatus {
+  DRAFT
+  ISSUED
+  VOID
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  UPI
+  BANK_TRANSFER
+  CHEQUE
+  OTHER
+}
+
+/// A payment is RECORDED when money is claimed to have arrived, and CONFIRMED
+/// only when a person says so. Nothing else may move it to CONFIRMED — see the
+/// CHECK constraint in the migration.
+enum PaymentStatus {
+  RECORDED
+  CONFIRMED
+  FAILED
+  REFUNDED
+}
+
+enum StockMovementType {
+  STOCK_IN
+  STOCK_OUT
+  ADJUSTMENT
+  RETURN
+  WASTE
+}
+
+enum FollowUpStatus {
+  PENDING
+  DUE
+  OVERDUE
+  COMPLETED
+  CANCELLED
+}
+
+/// A patient email is only SENT once a provider confirms it. PROVIDER_NOT_CONFIGURED
+/// exists so the product never claims delivery it cannot substantiate: with no
+/// email provider wired, Send records that state rather than lying.
+enum PatientEmailStatus {
+  DRAFT
+  QUEUED
+  SENT
+  FAILED
+  PROVIDER_NOT_CONFIGURED
+}
+
+enum NotificationSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum AiMessageRole {
+  USER
+  ASSISTANT
+  TOOL
+}
+
+enum AiToolExecutionStatus {
+  PENDING_CONFIRMATION
+  APPROVED
+  EXECUTED
+  REJECTED
+  EXPIRED
+  FAILED
+}
+
 // ---------------------------------------------------------------------------
-// Tenancy & identity
+// 1. Tenancy & identity
 // ---------------------------------------------------------------------------
 
-/// A tenant. Every business record in the platform will hang off an
-/// Organization, and every query is scoped by organizationId on the server.
+/// A tenant. Every business record in the platform hangs off an Organization,
+/// and every query is scoped by organizationId on the server.
 model Organization {
-  id        String           @id @default(uuid()) @db.Uuid
-  name      String
-  slug      String           @unique
-  type      OrganizationType @default(DENTAL_CLINIC)
-  timezone  String           @default("UTC")
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
+  id          String           @id @default(uuid()) @db.Uuid
+  name        String
+  slug        String           @unique
+  type        OrganizationType @default(DENTAL_CLINIC)
+  description String?
+  email       String?
+  phone       String?
+  addressLine String?
+  city        String?
+  state       String?
+  country     String           @default("IN")
+  /// IANA zone. All timestamps are stored UTC and displayed in this zone.
+  timezone    String           @default("Asia/Kolkata")
+  /// ISO 4217. Drives money formatting throughout the UI.
+  currency    String           @default("INR")
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 
-  memberships Membership[]
-  auditLogs   AuditLog[]
+  memberships      Membership[]
+  auditLogs        AuditLog[]
+  patients         Patient[]
+  appointments     Appointment[]
+  consultations    Consultation[]
+  prescriptions    Prescription[]
+  bills            Bill[]
+  payments         Payment[]
+  inventoryItems   InventoryItem[]
+  stockMovements   StockMovement[]
+  followUps        FollowUp[]
+  patientEmails    PatientEmail[]
+  notifications    Notification[]
+  aiConversations  AIConversation[]
+  aiToolExecutions AIToolExecution[]
 
   @@map("organizations")
 }
@@ -86,6 +252,20 @@ model Profile {
 
   memberships Membership[]
   auditLogs   AuditLog[]
+
+  createdAppointments   Appointment[] @relation("AppointmentCreatedBy")
+  closedAppointments    Appointment[] @relation("AppointmentClosedBy")
+  recordedConsultations Consultation[]
+  createdBills          Bill[]
+  recordedPayments      Payment[]     @relation("PaymentRecordedBy")
+  confirmedPayments     Payment[]     @relation("PaymentConfirmedBy")
+  stockMovements        StockMovement[]
+  assignedFollowUps     FollowUp[]    @relation("FollowUpAssignedTo")
+  completedFollowUps    FollowUp[]    @relation("FollowUpCompletedBy")
+  sentPatientEmails     PatientEmail[]
+  aiConversations       AIConversation[]
+  requestedExecutions   AIToolExecution[] @relation("ExecutionRequestedBy")
+  decidedExecutions     AIToolExecution[] @relation("ExecutionDecidedBy")
 
   @@map("profiles")
 }
@@ -111,11 +291,12 @@ model Membership {
 }
 
 // ---------------------------------------------------------------------------
-// Auditing
+// 2. Auditing
 // ---------------------------------------------------------------------------
 
 /// Append-only record of meaningful actions, including everything the AI agent
-/// performs through a tool. Written by the service layer, never by the model.
+/// performs through a tool. Written by `runCommand` inside the same transaction
+/// as the change it describes, never by a service author and never by the model.
 model AuditLog {
   id             String    @id @default(uuid()) @db.Uuid
   organizationId String    @db.Uuid
@@ -131,12 +312,540 @@ model AuditLog {
   metadata       Json?
   /// Set when the action was carried out by an AI tool call.
   aiToolName     String?
+  /// Idempotency key: a double-submitted action produces one record, not two.
+  commandId      String?   @db.Uuid
   createdAt      DateTime  @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   actorProfile Profile?     @relation(fields: [actorProfileId], references: [id], onDelete: SetNull)
 
+  @@unique([organizationId, commandId])
   @@index([organizationId, createdAt])
   @@index([organizationId, entityType, entityId])
   @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// 3. Patients
+// ---------------------------------------------------------------------------
+
+/// A person the organization serves. The system of record everything else
+/// hangs off.
+model Patient {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  fullName       String
+  /// Primary contact number. The most common way staff look a patient up, so
+  /// it is indexed alongside the organization.
+  phone          String?
+  email          String?
+  dateOfBirth    DateTime? @db.Date
+  gender         Gender    @default(UNDISCLOSED)
+  addressLine    String?
+  city           String?
+  state          String?
+  postalCode     String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  /// Free-text clinical or administrative notes.
+  ///
+  /// Treated as DATA by the AI agent, never as instructions: a note is written
+  /// by whoever walks in the door, so it is an untrusted channel.
+  notes          String?
+  /// Soft-deactivation. Clinical records are not hard-deleted in normal use.
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  appointments  Appointment[]
+  consultations Consultation[]
+  prescriptions Prescription[]
+  bills         Bill[]
+  followUps     FollowUp[]
+  emails        PatientEmail[]
+
+  @@index([organizationId, fullName])
+  @@index([organizationId, phone])
+  @@index([organizationId, createdAt])
+  @@map("patients")
+}
+
+// ---------------------------------------------------------------------------
+// 4. Appointments
+// ---------------------------------------------------------------------------
+
+/// A scheduled visit.
+///
+/// Note there is no practitioner reference. The product is built for a single
+/// administrator who maintains all records; adding staff identities would mean
+/// modelling availability, which is a different product.
+model Appointment {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  patientId      String            @db.Uuid
+  scheduledAt    DateTime
+  durationMinutes Int              @default(30)
+  type           AppointmentType   @default(CONSULTATION)
+  status         AppointmentStatus @default(SCHEDULED)
+  notes          String?
+
+  createdByProfileId String?  @db.Uuid
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  /// Set together, by a person, and only through `closeAppointment`.
+  /// A CHECK constraint makes COMPLETED-without-a-closer an impossible row.
+  closedAt           DateTime?
+  closedByProfileId  String?   @db.Uuid
+  /// What actually happened, captured at closure.
+  outcomeNotes       String?
+
+  cancelledAt        DateTime?
+  cancellationReason String?
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  patient       Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  createdBy     Profile?       @relation("AppointmentCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
+  closedBy      Profile?       @relation("AppointmentClosedBy", fields: [closedByProfileId], references: [id], onDelete: SetNull)
+  consultation  Consultation?
+  bills         Bill[]
+  followUps     FollowUp[]
+  emails        PatientEmail[]
+
+  @@index([organizationId, scheduledAt])
+  @@index([organizationId, status, scheduledAt])
+  @@index([organizationId, patientId, scheduledAt])
+  @@map("appointments")
+}
+
+// ---------------------------------------------------------------------------
+// 5. Clinical records
+// ---------------------------------------------------------------------------
+
+/// What was found and done during a visit.
+///
+/// Recording a consultation deliberately does NOT change the appointment's
+/// status. Closing the appointment stays a separate, explicit human act.
+model Consultation {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  patientId      String   @db.Uuid
+  /// One consultation per appointment at most; a walk-in may have none.
+  appointmentId  String?  @unique @db.Uuid
+  consultedAt    DateTime @default(now())
+  chiefComplaint String?
+  diagnosis      String?
+  treatment      String?
+  notes          String?
+  followUpNeeded Boolean  @default(false)
+
+  recordedByProfileId String?  @db.Uuid
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  patient       Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointment   Appointment?   @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  recordedBy    Profile?       @relation(fields: [recordedByProfileId], references: [id], onDelete: SetNull)
+  prescriptions Prescription[]
+  followUps     FollowUp[]
+
+  @@index([organizationId, patientId, consultedAt])
+  @@index([organizationId, consultedAt])
+  @@map("consultations")
+}
+
+model Prescription {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  patientId      String   @db.Uuid
+  consultationId String?  @db.Uuid
+  issuedAt       DateTime @default(now())
+  instructions   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  patient      Patient            @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  consultation Consultation?      @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  items        PrescriptionItem[]
+
+  @@index([organizationId, patientId, issuedAt])
+  @@map("prescriptions")
+}
+
+/// One medicine on a prescription. History is preserved: items are never
+/// rewritten in place once the prescription is issued.
+model PrescriptionItem {
+  id             String @id @default(uuid()) @db.Uuid
+  prescriptionId String @db.Uuid
+  medicine       String
+  dosage         String?
+  frequency      String?
+  durationDays   Int?
+  instructions   String?
+  /// Stable display order, so a reissued prescription reads the same.
+  position       Int    @default(0)
+
+  prescription Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  @@index([prescriptionId])
+  @@map("prescription_items")
+}
+
+// ---------------------------------------------------------------------------
+// 6. Billing
+// ---------------------------------------------------------------------------
+
+/// A bill for delivered treatment.
+///
+/// `subtotal`, `discount`, `tax` and `total` are stored because they are the
+/// legal content of the document and must not change if a price list later does.
+/// How much has been PAID is not stored — it is derived from confirmed payments,
+/// so it can never drift from the ledger and nothing can mark a bill paid as a
+/// side effect.
+model Bill {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @db.Uuid
+  patientId      String     @db.Uuid
+  appointmentId  String?    @db.Uuid
+  /// Human-facing reference, unique within the organization.
+  number         String
+  status         BillStatus @default(DRAFT)
+  issuedAt       DateTime?
+  subtotal       Decimal    @default(0) @db.Decimal(12, 2)
+  discount       Decimal    @default(0) @db.Decimal(12, 2)
+  tax            Decimal    @default(0) @db.Decimal(12, 2)
+  total          Decimal    @default(0) @db.Decimal(12, 2)
+  notes          String?
+
+  createdByProfileId String?  @db.Uuid
+  voidedAt           DateTime?
+  voidReason         String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  patient      Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointment  Appointment?   @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  createdBy    Profile?       @relation(fields: [createdByProfileId], references: [id], onDelete: SetNull)
+  items        BillItem[]
+  payments     Payment[]
+  emails       PatientEmail[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status, createdAt])
+  @@index([organizationId, patientId, createdAt])
+  @@map("bills")
+}
+
+model BillItem {
+  id          String  @id @default(uuid()) @db.Uuid
+  billId      String  @db.Uuid
+  description String
+  quantity    Decimal @default(1) @db.Decimal(12, 2)
+  unitPrice   Decimal @default(0) @db.Decimal(12, 2)
+  lineTotal   Decimal @default(0) @db.Decimal(12, 2)
+  position    Int     @default(0)
+
+  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([billId])
+  @@map("bill_items")
+}
+
+/// Money claimed against a bill.
+///
+/// RECORDED means somebody entered it. CONFIRMED means a person verified the
+/// money actually arrived, and is the only state that counts towards a balance.
+/// `confirmedAt` and `confirmedByProfileId` are set together by
+/// `confirmPayment`, which requires a `HumanIntent`; a CHECK constraint makes
+/// CONFIRMED-without-a-confirmer an impossible row.
+model Payment {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  billId         String        @db.Uuid
+  amount         Decimal       @db.Decimal(12, 2)
+  method         PaymentMethod @default(CASH)
+  status         PaymentStatus @default(RECORDED)
+  /// Cheque number, UPI reference, card terminal reference.
+  reference      String?
+  notes          String?
+
+  recordedByProfileId String?  @db.Uuid
+  recordedAt          DateTime @default(now())
+
+  confirmedAt          DateTime?
+  confirmedByProfileId String?   @db.Uuid
+
+  refundedAt   DateTime?
+  refundReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bill         Bill         @relation(fields: [billId], references: [id], onDelete: Cascade)
+  recordedBy   Profile?     @relation("PaymentRecordedBy", fields: [recordedByProfileId], references: [id], onDelete: SetNull)
+  confirmedBy  Profile?     @relation("PaymentConfirmedBy", fields: [confirmedByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status, recordedAt])
+  @@index([billId])
+  @@map("payments")
+}
+
+// ---------------------------------------------------------------------------
+// 7. Inventory
+// ---------------------------------------------------------------------------
+
+/// A consumable the clinic stocks.
+///
+/// `quantityOnHand` is a cache of the movement ledger, updated only inside the
+/// same transaction as the StockMovement that changed it. The ledger is the
+/// source of truth: quantity is never set directly from client input.
+model InventoryItem {
+  id                String   @id @default(uuid()) @db.Uuid
+  organizationId    String   @db.Uuid
+  name              String
+  category          String?
+  sku               String?
+  /// "box", "pair", "ml" — display only, never used in arithmetic.
+  unit              String   @default("unit")
+  quantityOnHand    Decimal  @default(0) @db.Decimal(12, 2)
+  minimumQuantity   Decimal  @default(0) @db.Decimal(12, 2)
+  preferredQuantity Decimal  @default(0) @db.Decimal(12, 2)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  movements    StockMovement[]
+
+  @@unique([organizationId, sku])
+  @@index([organizationId, isActive, name])
+  @@map("inventory_items")
+}
+
+/// An append-only change to stock. Never edited: a mistake is corrected with a
+/// compensating ADJUSTMENT, so the history explains how the count got here.
+model StockMovement {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  itemId         String            @db.Uuid
+  type           StockMovementType
+  /// Always positive. `type` determines the direction.
+  quantity       Decimal           @db.Decimal(12, 2)
+  /// The balance immediately after this movement, so history is readable
+  /// without replaying the whole ledger.
+  balanceAfter   Decimal           @db.Decimal(12, 2)
+  reason         String?
+  performedByProfileId String?     @db.Uuid
+  createdAt            DateTime    @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  item         InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  performedBy  Profile?      @relation(fields: [performedByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([itemId, createdAt])
+  @@map("stock_movements")
+}
+
+// ---------------------------------------------------------------------------
+// 8. Follow-ups
+// ---------------------------------------------------------------------------
+
+/// Something that needs chasing later.
+///
+/// PENDING -> DUE -> OVERDUE is a function of `dueDate` and the clock. A cron
+/// route materialises those transitions; it is allowed to touch follow-up
+/// status and nothing else.
+model FollowUp {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  patientId      String         @db.Uuid
+  appointmentId  String?        @db.Uuid
+  consultationId String?        @db.Uuid
+  dueDate        DateTime       @db.Date
+  status         FollowUpStatus @default(PENDING)
+  reason         String
+  notes          String?
+
+  assignedToProfileId String?  @db.Uuid
+  completedAt         DateTime?
+  completedByProfileId String? @db.Uuid
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  patient      Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointment  Appointment?   @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  consultation Consultation?  @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  assignedTo   Profile?       @relation("FollowUpAssignedTo", fields: [assignedToProfileId], references: [id], onDelete: SetNull)
+  completedBy  Profile?       @relation("FollowUpCompletedBy", fields: [completedByProfileId], references: [id], onDelete: SetNull)
+  emails       PatientEmail[]
+
+  @@index([organizationId, status, dueDate])
+  @@index([organizationId, patientId, dueDate])
+  @@map("follow_ups")
+}
+
+// ---------------------------------------------------------------------------
+// 9. Patient mail
+// ---------------------------------------------------------------------------
+
+/// An email to a patient, and its history.
+///
+/// The AI may create one of these with `generatedByAI: true`, but only in DRAFT.
+/// Moving to SENT requires `sendPatientEmail`, which takes a `HumanIntent` the AI
+/// layer cannot construct, and a CHECK constraint makes SENT-without-a-sender an
+/// impossible row. `status` is never SENT unless a provider confirmed delivery.
+model PatientEmail {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @db.Uuid
+  patientId      String             @db.Uuid
+  recipient      String
+  subject        String
+  body           String
+  status         PatientEmailStatus @default(DRAFT)
+  /// True when the body originated from the assistant, even if a human then
+  /// rewrote it. Recorded for the audit trail, not to restrict editing.
+  generatedByAI  Boolean            @default(false)
+
+  sentAt            DateTime?
+  sentByProfileId   String?   @db.Uuid
+  /// The provider's own id, so a delivery webhook can be matched back.
+  providerMessageId String?
+  /// Why a send failed, or why it could not be attempted.
+  failureReason     String?
+
+  relatedAppointmentId String? @db.Uuid
+  relatedBillId        String? @db.Uuid
+  relatedFollowUpId    String? @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  patient      Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  sentBy       Profile?     @relation(fields: [sentByProfileId], references: [id], onDelete: SetNull)
+  appointment  Appointment? @relation(fields: [relatedAppointmentId], references: [id], onDelete: SetNull)
+  bill         Bill?        @relation(fields: [relatedBillId], references: [id], onDelete: SetNull)
+  followUp     FollowUp?    @relation(fields: [relatedFollowUpId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status, createdAt])
+  @@index([organizationId, patientId, createdAt])
+  @@map("patient_emails")
+}
+
+// ---------------------------------------------------------------------------
+// 10. Internal notifications
+// ---------------------------------------------------------------------------
+
+/// Something the administrator should look at, shown inside the app.
+///
+/// Strictly internal. Nothing here is ever delivered to a patient — patient
+/// communication is `PatientEmail` and requires a human to press Send.
+model Notification {
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @db.Uuid
+  severity       NotificationSeverity @default(INFO)
+  title          String
+  body           String?
+  /// Deep link into the app, e.g. "/inventory/<id>".
+  href           String?
+  entityType     String?
+  entityId       String?
+  readAt         DateTime?
+  createdAt      DateTime             @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, readAt, createdAt])
+  @@map("notifications")
+}
+
+// ---------------------------------------------------------------------------
+// 11. AI assistant
+// ---------------------------------------------------------------------------
+
+model AIConversation {
+  id                 String   @id @default(uuid()) @db.Uuid
+  organizationId     String   @db.Uuid
+  createdByProfileId String?  @db.Uuid
+  title              String?
+  /// Running totals, so a per-organization budget can be enforced cheaply.
+  inputTokens        Int      @default(0)
+  outputTokens       Int      @default(0)
+  lastMessageAt      DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    Profile?          @relation(fields: [createdByProfileId], references: [id], onDelete: SetNull)
+  messages     AIMessage[]
+  executions   AIToolExecution[]
+
+  @@index([organizationId, lastMessageAt])
+  @@map("ai_conversations")
+}
+
+model AIMessage {
+  id             String        @id @default(uuid()) @db.Uuid
+  conversationId String        @db.Uuid
+  role           AiMessageRole
+  content        String
+  /// Tool calls the model requested on this turn, replayed to the provider on
+  /// the next turn. A provider rejects a transcript missing these.
+  toolCalls      Json?
+  /// For a TOOL turn: which tool produced this result.
+  toolName       String?
+  createdAt      DateTime      @default(now())
+
+  conversation AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("ai_messages")
+}
+
+/// A tool call the agent made, or wants to make.
+///
+/// This row is the ONLY source of truth for a pending confirmation. The client
+/// approves by id and never sends arguments: execution re-reads the parsed
+/// `arguments` the server wrote after validation, so a compromised client can
+/// change whether something runs, never what runs.
+///
+/// There is no code path from the agent loop to APPROVED. The loop only ever
+/// writes PENDING_CONFIRMATION and reads APPROVED; the transition is reachable
+/// solely from a cookie-authenticated Server Action.
+model AIToolExecution {
+  id             String                @id @default(uuid()) @db.Uuid
+  organizationId String                @db.Uuid
+  conversationId String                @db.Uuid
+  toolName       String
+  /// The PARSED input, written by the server after Zod validation.
+  arguments      Json
+  status         AiToolExecutionStatus @default(EXECUTED)
+  confirmationPrompt String?
+
+  requestedByProfileId String?   @db.Uuid
+  decidedByProfileId   String?   @db.Uuid
+  decidedAt            DateTime?
+  /// A stale pending approval must not be actionable hours later against
+  /// data that has since changed.
+  expiresAt            DateTime?
+
+  result    Json?
+  error     String?
+  createdAt DateTime @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  requestedBy  Profile?       @relation("ExecutionRequestedBy", fields: [requestedByProfileId], references: [id], onDelete: SetNull)
+  decidedBy    Profile?       @relation("ExecutionDecidedBy", fields: [decidedByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status, createdAt])
+  @@index([conversationId, createdAt])
+  @@map("ai_tool_executions")
 }

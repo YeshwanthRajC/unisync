@@ -7,9 +7,9 @@
 > implementation decision. A decision that is not written down here has not
 > been made.
 
-**Last updated:** 2026-09-23 — server foundation landed: command envelope,
-tenant tripwire, human-intent gate, AI tool factory, Vitest. `/api/health`
-reports `ready`.
+**Last updated:** 2026-09-23 — domain schema applied (20 tables), manual-gate
+CHECK constraints and RLS lockdown verified at the database, development seed
+written.
 
 ---
 
@@ -238,10 +238,37 @@ Organization 1──* Membership *──1 Profile
 Organization 1──* AuditLog   *──? Profile   (actor; null when actorType = SYSTEM)
 ```
 
-### Not yet modelled
+### Implemented — domain modules
 
-Patients, appointments, billing, reminders, inventory. These arrive with their
-modules, each carrying a non-null `organizationId`.
+| Group | Models |
+| --- | --- |
+| Patients | `Patient` |
+| Appointments | `Appointment` |
+| Clinical | `Consultation`, `Prescription`, `PrescriptionItem` |
+| Billing | `Bill`, `BillItem`, `Payment` |
+| Inventory | `InventoryItem`, `StockMovement` |
+| Follow-ups | `FollowUp` |
+| Patient mail | `PatientEmail` |
+| Internal | `Notification` |
+| AI | `AIConversation`, `AIMessage`, `AIToolExecution` |
+
+**No practitioner or doctor entity exists.** The product is built for a single
+administrator who maintains all records; appointments and consultations store no
+staff reference. Adding staff identities would mean modelling availability, which
+is a different product.
+
+Two things are deliberately NOT stored:
+
+- **How much a bill has been paid.** Derived at read time from `CONFIRMED`
+  payments, so it cannot drift from the ledger — and, more importantly, nothing
+  can mark a bill paid as a side effect of inserting a payment row. `BillStatus`
+  covers only the document's lifecycle (`DRAFT`, `ISSUED`, `VOID`).
+- **Any practitioner name.** See above.
+
+One thing is deliberately cached: `InventoryItem.quantityOnHand`, updated only
+inside the same transaction as the `StockMovement` that changed it. The ledger
+remains the source of truth and records `balanceAfter`, so history is readable
+without replaying it.
 
 ### Conventions
 
@@ -254,10 +281,39 @@ modules, each carrying a non-null `organizationId`.
 
 ### Migrations
 
-First migration applied 2026-09-23: `20260923022206_init_tenancy_foundation`,
-creating the four tables above on Supabase Postgres 17.6. Verified by a
-write → read → delete round trip through the pooled connection; the database was
-left empty afterwards.
+Three migrations applied, all on Supabase Postgres 17.6:
+
+1. `20260923022206_init_tenancy_foundation` — the four tenancy tables.
+2. `20260923173935_domain_modules` — 16 domain tables, 12 enums, plus the
+   hand-written `CHECK` constraints below.
+3. `20260923174045_rls_lockdown` — RLS.
+
+`prisma migrate dev` cannot run here (it is interactive and this environment is
+not), so migrations are generated with
+`prisma migrate diff --from-config-datasource --to-schema` and applied with
+`prisma migrate deploy`. The generated SQL is edited by hand before applying
+where Prisma cannot express the constraint.
+
+**The existing migration is never edited and the database is never reset.**
+
+#### CHECK constraints — the manual gates, at the database
+
+Prisma cannot express `CHECK`, so these are hand-written in
+`20260923173935_domain_modules`:
+
+```sql
+("status" = 'COMPLETED') = ("closedAt" IS NOT NULL AND "closedByProfileId" IS NOT NULL)
+("status" = 'CONFIRMED') = ("confirmedAt" IS NOT NULL AND "confirmedByProfileId" IS NOT NULL)
+("status" = 'SENT')      = ("sentAt" IS NOT NULL AND "sentByProfileId" IS NOT NULL)
+```
+
+Written as equivalences rather than implications, so the reverse also holds: a
+closer cannot be recorded without the status that justifies it, which stops a
+half-applied write leaving a misleading row.
+
+All three were verified by attempting the bad insert over a raw connection — each
+was refused by name. Plus: stock movement quantity > 0, payment amount > 0,
+appointment duration > 0, bill totals non-negative.
 
 ---
 
@@ -442,6 +498,14 @@ no-op in `vitest.config.mts`: that package throws unless the resolver picks its
 - [x] **First migration applied** — the four tenancy tables exist; a Prisma
       write/read/delete round trip over the pooled connection succeeds.
       `/api/health` reports `ready`.
+- [x] **Domain schema** — 20 tables, 12 enums. Manual-gate `CHECK` constraints
+      verified by attempting the bad insert over a raw connection; RLS enabled,
+      forced and policy-free on every table, verified by confirming the
+      publishable key receives `42501 permission denied`.
+- [x] **Development seed** — `npm run db:seed -- you@example.com`. Attaches a
+      full sample clinic to a real Supabase Auth account, refuses to run under
+      `NODE_ENV=production`, and is re-runnable. Cannot be executed until
+      authentication exists, since it deliberately will not fabricate a profile.
 - [x] **Server foundation** — permission vocabulary (45 permissions assembled
       from grant blocks), domain errors, `ActionResult`, `runCommand` audited
       transaction envelope, tenant scoping + tripwire, `HumanIntent` gate, action
@@ -686,23 +750,24 @@ always populate a call `id`, so results are correlated by name and position.
    dependencies are connected and `/api/health` reports `ready`, but the
    database holds no data, so `requireOrganizationContext()` has nothing to
    resolve. The authentication module is the next step.
-2. **No Row Level Security policies yet.** Application-layer scoping plus the
-   tenant tripwire are in place, but nothing is enforced in Postgres. Arriving
-   with the schema as an RLS + `FORCE ROW LEVEL SECURITY` lockdown of the
-   browser-facing publishable key.
+2. **RLS protects the browser key, not Prisma.** Every table has RLS `ENABLE`d
+   and `FORCE`d with **zero policies**, and `anon`/`authenticated` have had all
+   privileges revoked — verified: the publishable key gets `42501 permission
+   denied` on every table. That closes the surface that is actually exposed,
+   since that key ships inside the browser bundle.
 
-   Note for whoever writes it: Prisma connects over `DATABASE_URL` as the table
-   **owner**, and owners bypass RLS unless the table is set to `FORCE ROW LEVEL
-   SECURITY`. Supabase's usual `auth.uid()` policies also evaluate to NULL for a
-   Prisma connection, because Prisma does not carry a Supabase JWT. RLS added
-   without accounting for both is decorative — it looks protective and enforces
-   nothing.
+   It does **not** constrain Prisma, which connects as a role with `BYPASSRLS`.
+   Tenant isolation for our own code is application-layer: `OrganizationContext`,
+   `orgScope`/`orgWhere`, and the tripwire that throws on an unscoped tenant
+   query. Making Postgres enforce it for Prisma too would need a dedicated
+   non-owning role plus `SET LOCAL app.organization_id` on every query, which
+   makes every read transactional. Tracked as a hardening pass before production.
 3. **`npm audit` reports 4 high-severity advisories** in `deepmerge-ts` and
    `mysql2`, both transitive dependencies of the **Prisma CLI** (dev-only).
    `mysql2` is never loaded on a PostgreSQL datasource. The only offered fix is
    a downgrade to Prisma 6, which would be a larger regression. Revisit when
    Prisma 7.x updates the dependency.
-4. **Test coverage is deliberately narrow.** 45 Vitest tests cover the
+4. **Test coverage is deliberately narrow.** 50 Vitest tests cover the
    security-critical declarative logic — the permission matrix, the tenant
    tripwire, AI tool validation and the registry gates. Service behaviour and UI
    are not covered, and there is no browser E2E.
@@ -711,9 +776,9 @@ always populate a call `id`, so results are correlated by name and position.
    no membership. The authentication module handles this.
 6. **`/api/health` is unauthenticated.** It exposes only booleans, but it
    should be restricted before production.
-7. **`AuditLog` has no idempotency key.** A double-submitted Server Action
-   produces two records. A `commandId` + `@@unique([organizationId, commandId])`
-   arrives with the schema work.
+7. **`runCommand` does not yet write `commandId`.** The column and its unique
+   index exist, so a double-submitted action still produces two audit records
+   until the wrapper threads an idempotency key through.
 8. **`requireOrganizationContext()` silently picks the oldest membership.** Its
    comment claims ambiguity is an error; the code takes `memberships[0]`. Harmless
    while the product has one administrator per organization, but it needs an
