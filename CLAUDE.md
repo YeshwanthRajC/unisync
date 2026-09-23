@@ -737,6 +737,23 @@ the agent loops on arguments that can never parse and simply appears stupid.
 Unions, `.refine`, `.transform` and `z.date()` are unrepresentable by design;
 constraints go in `.describe()` prose, which the registry requires on every field.
 
+### 2026-09-23 — The cached Prisma client rebuilds when the tenant guard changes
+
+The tripwire extension is baked into the client at construction, and the client
+is cached on `globalThis` so hot reloads do not accumulate connection pools. The
+two together meant an edit to `tenant-guard.ts` had NO effect until the whole dev
+server was restarted.
+
+That produces the worst kind of confusion: a fix demonstrably present on disk and
+passing its tests, while the running app keeps throwing the old error from line
+numbers that no longer exist. It cost a full round trip to diagnose.
+
+`getPrismaClient()` now compares the identity of the imported `tenantTripwire`
+against the one the cached client was built with. Editing the guard module gives
+the function a new identity, so the mismatch is detected exactly and the client is
+rebuilt, disconnecting the stale pool rather than leaking one per edit.
+Development only — in production nothing is re-evaluated.
+
 ### 2026-09-23 — `next-themes` removed; the theme is a prop
 
 React 19 warns on every render that `next-themes` injects a `<script>` inside a

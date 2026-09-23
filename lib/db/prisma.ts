@@ -54,10 +54,38 @@ export type AppPrisma = ReturnType<typeof createPrismaClient>;
  */
 const globalForPrisma = globalThis as unknown as {
   prisma: AppPrisma | undefined;
+  /** Identity of the tripwire the cached client was built with. */
+  prismaGuard: unknown;
 };
 
 function getPrismaClient(): AppPrisma {
+  /*
+   * Rebuild the client when the tenant guard itself has been edited.
+   *
+   * The extension is baked into the client at construction, and the client is
+   * cached on `globalThis` to survive hot reloads — so a change to
+   * `tenant-guard.ts` would otherwise have NO effect until the whole dev server
+   * was restarted. That produces the worst kind of confusion: a fix that is
+   * demonstrably on disk and passing its tests, while the running app keeps
+   * throwing the old error from the old line numbers.
+   *
+   * Editing the guard module gives `tenantTripwire` a new function identity, so
+   * comparing references detects it exactly. Development only: in production
+   * nothing is ever re-evaluated, and the comparison would only add work.
+   */
+  if (
+    process.env.NODE_ENV === "development" &&
+    globalForPrisma.prisma &&
+    globalForPrisma.prismaGuard !== tenantTripwire
+  ) {
+    const stale = globalForPrisma.prisma;
+    globalForPrisma.prisma = undefined;
+    // Release its pool rather than leaking a connection per edit.
+    void stale.$disconnect().catch(() => {});
+  }
+
   globalForPrisma.prisma ??= createPrismaClient();
+  globalForPrisma.prismaGuard = tenantTripwire;
   return globalForPrisma.prisma;
 }
 
