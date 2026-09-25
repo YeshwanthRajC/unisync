@@ -72,7 +72,7 @@ const databaseEnvSchema = z.object({
 
 const aiEnvSchema = z.object({
   GEMINI_API_KEY: nonEmpty,
-  GEMINI_MODEL: z.string().trim().min(1).default("gemini-1.5-flash"),
+  GEMINI_MODEL: z.string().trim().min(1).default("gemini-3.8-flash"),
 });
 
 const brevoEnvSchema = z.object({
