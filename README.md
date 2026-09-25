@@ -1,4 +1,4 @@
-# 🦷 UniSync
+# 🦷 UniSync - https://unisync-platform.vercel.app/
 
 <div align="center">
   <h3><strong>The Intelligent Admin Workspace for Modern Clinics</strong></h3>
