@@ -113,7 +113,8 @@ export function dayBoundsInZone(
  * naive wall-clock string crosses into that.
  */
 export function zonedTimeToUtc(localDateTime: string, timeZone: string): Date {
-  const naive = new Date(`${localDateTime}:00Z`);
+  const trimmed = localDateTime.slice(0, 16);
+  const naive = new Date(`${trimmed}:00Z`);
   const offset = offsetMinutesAt(naive, timeZone);
   return new Date(naive.getTime() - offset * 60_000);
 }

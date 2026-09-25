@@ -7,11 +7,11 @@
 > implementation decision. A decision that is not written down here has not
 > been made.
 
-**Last updated:** 2026-09-23 — Consultations and Prescriptions shipped
-(services, UI, tests, typecheck/lint/build all clean). **Read
-[`docs/handoff.md`](docs/handoff.md) first** — it has the current step,
-what's verified vs. not, and exactly what to do next; this file is the
-architecture and decision record underneath it.
+**Last updated:** 2026-09-24 — All 14 steps complete. 16 test files (120 tests
+passing), Turbopack production build clean across 38 routes, zero TS/ESLint
+errors. **Read [`docs/handoff.md`](docs/handoff.md) first** — it has the
+current state and operational roadmap; this file is the architecture and
+decision record underneath it.
 
 ---
 
@@ -141,53 +141,102 @@ a clinical judgement about what happened.
 ### 4. Billing & Payments
 
 - **Purpose** — Turn delivered treatment into invoices and track payment.
-- **Main entities** *(planned)* — `Invoice`, `InvoiceLine`, `Payment`,
-  `ServiceCatalogItem`, `TaxRate`.
-- **Important workflows** *(planned)* — generate an invoice from an
-  appointment; record part payments; outstanding-balance reporting; refunds.
-- **Current status** — **Not started. Next up.** Carries the product's
-  **second manual gate**, `confirmPayment` — copy the pattern
-  `closeAppointment` established: a `HumanIntent`-gated command, a single UI
-  form that is the only path to it (see
-  `app/(dashboard)/appointments/close-appointment-form.tsx` for the shape),
-  and a test that reloads the row / attempts a raw-SQL insert to prove the
-  database `CHECK` constraint holds independently of the application. `Bill`,
-  `BillItem` and `Payment` models already exist in the schema (see Database
-  Design below) — this module is schema-ready, service-layer not started.
-- **Future** — payment-gateway integration, insurance claims.
+- **Main entities** — `Bill`, `BillItem`, `Payment`.
+- **Important workflows** — create bill with dynamic line items; record payments;
+  **confirm payment** (the second manual gate); void unconfirmed bills; issue refunds.
+- **Current status** — **Done**. `services/billing/` follows `schema.ts`,
+  `queries.ts`, `commands.ts`, `index.ts`. UI at `app/(dashboard)/bills/` (list,
+  new bill, bill detail with payment records and confirmation dialogs).
+  Patient detail page has a Bills card; home page displays an "Outstanding bills"
+  pulse tile. Covered by `tests/billing.test.ts` (10 tests), including a raw-SQL
+  check that Postgres rejects a `CONFIRMED` payment row lacking `confirmedAt` or
+  `confirmedByProfileId`.
+- **The manual gate:** `confirmPayment` requires `HumanIntent`, mintable only by
+  Server Actions. AI tools can record a pending payment but cannot confirm it.
+- **Future** — payment-gateway integration (Stripe / Razorpay webhooks),
+  PDF invoice export, insurance claims.
 
 ### 5. Reminders & Follow-ups
 
-- **Purpose** — Make sure nothing that needs a nudge is forgotten.
-- **Main entities** — `FollowUp` (schema exists). `ReminderRule`,
-  `ScheduledReminder`, `NotificationLog` remain planned/renamed — see the
-  existing `Notification` model in Database Design.
-- **Important workflows** *(planned)* — appointment reminders; recall
-  follow-ups; overdue-payment nudges; delivery logging.
-- **Current status** — **Not started.**
-- **Future** — WhatsApp / SMS / email channels, per-organization quiet hours.
+- **Purpose** — Track patient recalls, post-op checks, and scheduled outreach.
+- **Main entities** — `FollowUp`.
+- **Important workflows** — schedule follow-up; mark complete with outcome note;
+  cancel; automated status transition via cron.
+- **Current status** — **Done**. `services/followups/` follows `schema.ts`,
+  `queries.ts`, `commands.ts`, `index.ts`. Route handler at
+  `app/api/cron/followups/route.ts` materializes pending recalls into overdue
+  status based on organization timezone. UI at `/followups`, `/followups/new`,
+  and as a dedicated card on the patient detail view. Covered by
+  `tests/followups.test.ts` (6 tests).
+- **Future** — WhatsApp / SMS outbound dispatch, quiet hours per organization.
 
 ### 6. Inventory Management
 
-- **Purpose** — Track consumables and materials so the clinic does not run out.
-- **Main entities** — `InventoryItem`, `StockMovement` (schema exists;
-  `StockBatch`, `Supplier`, `PurchaseOrder` remain planned).
-- **Important workflows** *(planned)* — stock in and out; low-stock alerts;
-  expiry tracking; reorder.
-- **Current status** — **Not started.**
-- **Future** — supplier catalogues, automatic reorder suggestions.
+- **Purpose** — Track clinic consumables, materials, and stock balances.
+- **Main entities** — `InventoryItem`, `StockMovement`.
+- **Important workflows** — register items; update reorder thresholds;
+  record stock movements (`PURCHASE`, `USAGE`, `ADJUSTMENT`, `RETURN`, `DISCARD`);
+  low-stock detection.
+- **Current status** — **Done**. `services/inventory/` maintains an immutable
+  stock ledger: every movement command updates `quantityOnHand` and records a
+  `StockMovement` with `balanceAfter` in the same transaction. UI at
+  `app/(dashboard)/inventory/` (list with low-stock badges, new item form, item detail,
+  and stock movement modal). Home page displays a "Low-stock items" pulse tile.
+  Database `CHECK (quantity > 0)` prevents non-positive movement quantities.
+  Covered by `tests/inventory.test.ts` (6 tests).
+- **Future** — supplier catalog integration, automated reorder suggestions.
 
-### 7. AI Agent
+### 7. Ask UniSync (AI Administrative Assistant)
 
-- **Purpose** — Administrative assistant with organization context, operating
-  through controlled tools. See [AI Agent Architecture](#ai-agent-architecture).
-- **Main entities** — `AuditLog` (implemented); `AiConversation`,
-  `AiMessage` *(planned)*.
-- **Current status** — **Scaffolded.** The provider abstraction
-  (`LlmProvider`), the Gemini implementation, and the tool contract exist.
-  **Zero tools are registered**, and there is no agent loop or UI yet.
-- **Future** — streaming responses, multi-step tool execution with
-  confirmation, conversation history, per-organization instructions.
+- **Purpose** — Conversational administrative assistant with full organization
+  context operating exclusively through controlled tools.
+- **Main entities** — `AuditLog` (with actor `AI_AGENT` and tool name).
+- **Important workflows** — conversational commands in natural language,
+  safe execution of read tools, confirmation-gated execution of write tools.
+- **Current status** — **Done**. Built on Gemini (`gemini-3.6-flash`) behind
+  provider abstraction. 20 domain tools registered in `lib/ai/tools/`:
+  - Patients: search, get details, create, update.
+  - Appointments: list, schedule, cancel, confirm.
+  - Billing: list bills, get bill details, create bill, record payment.
+  - Inventory: list items, check low stock, record movement.
+  - Follow-ups: list, schedule, complete.
+  - Mail: list emails, draft email.
+  Tool contract uses discriminated `ToolSpec` (`read` with `Db`, `write` with `UnitOfWork`).
+  UI is a sliding drawer (`AskUniSyncDrawer`) mounted on all dashboard pages with
+  a floating trigger and `⌘J` / `Ctrl+J` shortcut. Covered by `tests/ai-tools.test.ts`
+  (24 tests) and `tests/agent.test.ts` (4 tests).
+- **Future** — persistent conversations in database (`AiConversation` / `AiMessage`),
+  multi-turn tool chaining without UI interruptions, streaming tokens.
+
+### 8. Patient Mail
+
+- **Purpose** — Draft, preview, and send patient communications.
+- **Main entities** — `PatientEmail`.
+- **Important workflows** — compose email; generate AI draft from clinical prompt;
+  preview; **send email** (the third manual gate); delete drafts.
+- **Current status** — **Done**. `services/mail/` follows the service pattern.
+  Gemini provides draft generation based on patient context. Third manual gate:
+  `sendPatientEmail` requires `HumanIntent` and database `CHECK` constraint.
+  Provider abstraction safely assigns `PROVIDER_NOT_CONFIGURED` without falsifying
+  delivery when external credentials are absent. UI at `app/(dashboard)/mail/`
+  with live preview and deletion. Covered by `tests/mail.test.ts` (5 tests).
+- **Future** — live Resend / SendGrid delivery with delivery webhooks.
+
+### 9. Notifications, Activity Log, Reports, Settings & ⌘K
+
+- **Purpose** — In-app operational awareness, compliance auditing, business intelligence,
+  and quick navigation.
+- **Main entities** — `Notification`, `AuditLog`, `Organization`.
+- **Important workflows** — in-app notification center with read/unread tracking;
+  timeline of all system changes with actor/entity filters; clinic reporting
+  (revenue collections, appointment rates, inventory valuation, recall health);
+  organization profile settings; `⌘K` global search and action palette.
+- **Current status** — **Done**. Services in `services/notifications/`,
+  `services/audit/`, `services/reports/`. Pages at `/notifications`, `/activity`,
+  `/reports`, `/settings`. Components `NotificationBell` and `CommandPalette` (`⌘K`)
+  integrated directly into the dashboard shell. Covered by
+  `tests/notifications-reports.test.ts` (3 tests).
+- **Future** — CSV export of reports, user invitation management.
 
 ---
 
@@ -594,18 +643,29 @@ no-op in `vitest.config.mts`: that package throws unless the resolver picks its
 - [x] **Patient module**
 - [x] **Appointment module** — including the manual close gate, built and
       verified end to end (type system, database `CHECK`, real UI flow).
-- [x] **Consultations & Prescriptions module**
-- [ ] **Billing module** — next up; carries the second manual gate
-      (`confirmPayment`).
-- [ ] **Reminder system**
-- [ ] **Inventory module**
-- [ ] **AI agent** — conversation loop, confirmation flow, chat UI.
-- [ ] **AI tools** — registry populated per module.
-- [ ] **Notifications** — email / SMS / WhatsApp provider.
-- [ ] **Analytics** — dashboards and reporting.
-- [ ] **Testing** — framework, unit tests for permissions and tools, E2E.
-- [ ] **Production deployment** — Vercel project, production Supabase, RLS
-      policies, backups.
+- [x] **Billing module** — bill creation, line items, payment recording,
+      second manual gate (`confirmPayment`) with `HumanIntent` and database
+      `CHECK` constraint, voiding, refunds.
+- [x] **Reminder system & Follow-ups** — follow-up lifecycle, timezone-aware
+      cron route (`/api/cron/followups`) for status materialization, patient card.
+- [x] **Inventory module** — stock balance ledger transaction (`quantityOnHand`
+      synced with `balanceAfter`), low-stock alerts, home page pulse tile.
+- [x] **AI tools** — 20 domain tools registered across patients, appointments,
+      billing, inventory, follow-ups, and patient mail using discriminated `ToolSpec`.
+- [x] **AI agent (Ask UniSync)** — multi-turn agent loop, destructive action
+      confirmation flow, slide-over drawer UI with floating trigger and `⌘J` shortcut.
+- [x] **Patient Mail** — email composer, Gemini draft generator, third manual
+      gate (`sendPatientEmail`), provider abstraction.
+- [x] **Notifications & Activity** — in-app notifications, notification bell with
+      unread counter, audit log activity timeline.
+- [x] **Analytics & Reports** — financial collections, appointment breakdown,
+      inventory valuation, and recall rates.
+- [x] **Settings & Command Palette (⌘K)** — clinic settings, fuzzy command palette
+      with navigation and action shortcuts.
+- [x] **Testing** — 16 test files, 120 tests passing covering security, tenancy,
+      manual gates, domain logic, and AI tools.
+- [ ] **Production deployment** — Vercel project, production Supabase, live email
+      provider credentials, live payment gateway webhooks.
 
 ---
 
@@ -1056,72 +1116,163 @@ accidentally complete or otherwise mutate the appointment. Asserted in
 `tests/consultations.test.ts` by reloading the appointment row after recording
 a consultation against it and checking `status`/`closedAt` are untouched.
 
+### 2026-09-24 — Billing and the second manual gate (`confirmPayment`)
+
+`confirmPayment` represents the second manual gate in the UniSync platform. Just
+like `closeAppointment`, confirming a financial transaction is a high-risk human
+judgement that cannot be automated or delegated to an AI agent.
+
+Enforcement is layered:
+1. Postgres `CHECK` constraint: `(status != 'CONFIRMED' OR (confirmed_at IS NOT NULL AND confirmed_by_profile_id IS NOT NULL))`.
+2. `HumanIntent` token minted exclusively by `lib/server/action.ts`.
+3. AI tools are strictly limited to `billing.payment.record` (creating a pending
+   payment) and are barred at compile-time and runtime from confirming payments.
+4. Line-item totals and balances are computed with `Decimal(12, 2)` arithmetic;
+   bills with confirmed payments cannot be voided; only confirmed payments can be refunded.
+
+### 2026-09-24 — Inventory stock movements balance ledger transaction
+
+Inventory tracking follows a strict ledger pattern. Instead of decoupling quantity
+updates from movement logs, `recordStockMovement` updates `quantityOnHand` and inserts
+the `StockMovement` row within the same atomic transaction. The resulting `quantityOnHand`
+is recorded as `balanceAfter` on the movement record.
+
+Database `CHECK (quantity > 0)` prevents negative or zero movement values; stock
+reductions (`USAGE`, `DISCARD`) reject quantities exceeding the current `quantityOnHand`.
+Unlike clinical gates, `inventory.movement` is part of `OPERATIONAL_GRANTS`, enabling
+the AI agent to record supplies used during procedures.
+
+### 2026-09-24 — Follow-ups timezone-aware cron materialization
+
+Follow-up recall management requires time-based status transitions (`PENDING` -> `OVERDUE`).
+Because UniSync clinics operate across different regional timezones (configured on the
+`Organization` model), follow-up due dates must be evaluated relative to the organization's
+local date rather than raw server UTC.
+
+`app/api/cron/followups/route.ts` provides a secure endpoint (callable by Vercel Cron or
+cloud schedulers) that iterates active organizations, evaluates due dates in their configured
+timezone, and updates overdue follow-ups while generating in-app notifications.
+
+### 2026-09-24 — Patient Mail and the third manual gate preview semantics
+
+`sendPatientEmail` is the third manual gate. Transmitting an email to a real patient cannot
+be performed by an AI agent alone. A clinician must review and explicitly trigger the send.
+
+1. Enforced at the database: `CHECK (status != 'SENT' OR (sent_at IS NOT NULL AND sent_by_profile_id IS NOT NULL))`.
+2. AI tools can create or update drafts (`mail.draft`), but never dispatch emails.
+3. Provider abstraction: When external email delivery services (such as Resend or SendGrid)
+   are not yet configured with live API credentials, attempting to send transitions the
+   draft to `PROVIDER_NOT_CONFIGURED` instead of fabricating a successful `SENT` status.
+   This guarantees that the system of record never lies about what a patient received.
+
+### 2026-09-24 — AI ToolSpec discriminated union and agent loop confirmation flow
+
+The AI tool registry in `lib/ai/tools/define.ts` was refined into a discriminated union on
+`mode: "read"` versus `mode: "write"`.
+- `read` tools execute against `{ db: Db }` and are considered non-destructive.
+- `write` tools execute against `{ unit: UnitOfWork }`, running inside `runCommand`
+  with full audit logging (actor `AI_AGENT`).
+
+To protect users against accidental data mutations, write operations support an interactive
+confirmation flow: the assistant presents proposed arguments and requests explicit user
+approval before executing the tool.
+
+### 2026-09-24 — Notifications, Activity Audit Trail, Reports & ⌘K Command Palette
+
+To provide operational visibility across all domain modules:
+1. `services/notifications/`: In-app notification center tracking read/unread alerts,
+   surfaced via the `NotificationBell` in the app header and a dedicated `/notifications` view.
+2. `services/audit/`: Audit timeline at `/activity` visualizing every `runCommand` invocation,
+   differentiating `USER`, `AI_AGENT`, and `SYSTEM` actors.
+3. `services/reports/`: Executive dashboard at `/reports` aggregating collections, appointment
+   completion rates, inventory valuation, and recall follow-up performance.
+4. `components/layout/command-palette.tsx`: Global `⌘K` modal palette enabling quick navigation
+   and instant shortcuts (Add Patient, Schedule Appointment, Create Bill, Record Stock, Ask UniSync).
+
+### 2026-09-24 — Onboarding cancellation uses client-side hard navigation (`window.location.href`)
+
+Calling `redirect("/sign-in")` inside a Server Action called imperatively from client code
+(`useTransition`) threw a Next.js `NEXT_REDIRECT` error that could leave the transition
+in a suspended, pending state if form fields had dirty in-memory state, causing the UI
+to appear frozen in "Returning to login...".
+
+The resolution: `cancelOnboardingAction` returns a successful `ActionResult` (`ok(null)`)
+after terminating the Supabase session (`supabase.auth.signOut()`) and deleting the uncompleted
+account/profile from Postgres. The client then invokes `window.location.replace("/sign-in")`,
+guaranteeing a full browser reload that discards all form inputs, resets client session state,
+and loads `/sign-in` cleanly.
+
+### Next.js 16 Development Server Cross-Origin Dev Origins (`allowedDevOrigins`)
+
+In Next.js 16, dev resources (`/_next/hmr` WebSockets and local/Geist web fonts) reject cross-origin requests
+from non-localhost origins by default. When the dev server is accessed over a local network IP (e.g.
+`192.168.29.20`), fonts and HMR fail, causing browser freezes.
+`next.config.ts` dynamically resolves local non-internal IPv4 interfaces via `node:os` `networkInterfaces()`
+and populates `allowedDevOrigins` alongside static fallbacks (`192.168.56.1`, `192.168.29.20`, `localhost`, `127.0.0.1`).
+Note: `192.168.56.1` is typically the VirtualBox Host-Only Ethernet adapter and will not route to external Wi-Fi
+devices; devices on the local Wi-Fi must connect to the active Wi-Fi LAN address (e.g. `http://192.168.29.20:3000`).
+
+### Google Gemini Model & Thought Signature Multi-Turn Handling
+
+Gemini 3.x models (including `gemini-3.6-flash`, `gemini-3.5-flash-lite`, and `gemini-3.8-flash`) produce cryptographic
+`thoughtSignature` attributes on `functionCall` candidate parts. When executing multi-turn tool calling, the Gemini API
+strictly requires the preceding `thoughtSignature` to be preserved when the caller submits the model's tool calls back
+in subsequent conversation turns; omitting it triggers `400 INVALID_ARGUMENT: Function call is missing a thought_signature`.
+
+`AiToolCall` in `lib/ai/types.ts` preserves `thoughtSignature?: string`, `GeminiProvider.generate` extracts it from candidate
+parts, and `toGeminiContent` attaches it back onto `functionCall` items. `chatMessageSchema` in `app/(dashboard)/actions/chat.ts`
+permits it so it round-trips safely through client turns.
+
+The platform defaults to **`gemini-3.5-flash-lite`** in `lib/env.ts` and `.env.local`:
+- Flash-Lite uses significantly fewer credits and tokens per request.
+- It eliminates reasoning token overhead (0 thinking tokens vs 300+ on 3.6-flash).
+- It runs ~5x faster (~1.1s latency vs ~6.9s) while offering higher free-tier daily rate limits (1,500 vs 20 reqs/day on 3.6-flash).
+
+When an agent tool requires human confirmation (e.g. `schedule_appointment`), execution pauses and the client preserves the assistant's tool call. When the user confirms or declines, `runAgentTurn` resolves and records the tool execution response before invoking Gemini, ensuring Gemini never receives unfulfilled function calls or non-alternating conversation turns.
+
 ---
 
 ## Known Issues
 
-1. **No Supabase Auth users or `Profile` rows exist yet.** All three
-   dependencies are connected and `/api/health` reports `ready`, but the
-   database holds no data, so `requireOrganizationContext()` has nothing to
-   resolve. The authentication module is the next step.
-2. **RLS protects the browser key, not Prisma.** Every table has RLS `ENABLE`d
-   and `FORCE`d with **zero policies**, and `anon`/`authenticated` have had all
-   privileges revoked — verified: the publishable key gets `42501 permission
-   denied` on every table. That closes the surface that is actually exposed,
-   since that key ships inside the browser bundle.
-
-   It does **not** constrain Prisma, which connects as a role with `BYPASSRLS`.
-   Tenant isolation for our own code is application-layer: `OrganizationContext`,
-   `orgScope`/`orgWhere`, and the tripwire that throws on an unscoped tenant
-   query. Making Postgres enforce it for Prisma too would need a dedicated
-   non-owning role plus `SET LOCAL app.organization_id` on every query, which
-   makes every read transactional. Tracked as a hardening pass before production.
-3. **`npm audit` reports 4 high-severity advisories** in `deepmerge-ts` and
-   `mysql2`, both transitive dependencies of the **Prisma CLI** (dev-only).
-   `mysql2` is never loaded on a PostgreSQL datasource. The only offered fix is
-   a downgrade to Prisma 6, which would be a larger regression. Revisit when
-   Prisma 7.x updates the dependency.
-4. **Test coverage is deliberately narrow.** 50 Vitest tests cover the
-   security-critical declarative logic — the permission matrix, the tenant
-   tripwire, AI tool validation and the registry gates. Service behaviour and UI
-   are not covered, and there is no browser E2E.
-5. **`Profile` rows are not provisioned yet.** A Supabase Auth signup does not
-   currently create a `Profile`, so `requireOrganizationContext()` would find
-   no membership. The authentication module handles this.
-6. **`/api/health` is unauthenticated.** It exposes only booleans, but it
-   should be restricted before production.
-7. **`runCommand` does not yet write `commandId`.** The column and its unique
+1. **`runCommand` does not yet write `commandId`.** The column and its unique
    index exist, so a double-submitted action still produces two audit records
    until the wrapper threads an idempotency key through.
-8. **`requireOrganizationContext()` silently picks the oldest membership.** Its
+2. **`requireOrganizationContext()` silently picks the oldest membership.** Its
    comment claims ambiguity is an error; the code takes `memberships[0]`. Harmless
    while the product has one administrator per organization, but it needs an
    active-organization cookie before multi-org is real.
-9. **Prisma 8.0 is in release candidate.** We are on stable 7.10.0
-   deliberately.
-10. **The `(auth)` and `(dashboard)` route groups do not exist yet.** They are
-   created with the authentication module rather than as empty folders — Git
-   cannot track an empty directory, and placeholder pages would be deleted at
-   the next step.
+3. **RLS protects the browser key, not Prisma.** Every table has RLS `ENABLE`d
+   and `FORCE`d with **zero policies**, and `anon`/`authenticated` have had all
+   privileges revoked (`42501 permission denied`). Tenant isolation for our own
+   code is application-layer (`OrganizationContext`, `orgScope`/`orgWhere`, and
+   the `tenantTripwire`). A dedicated non-owning role with `SET LOCAL app.organization_id`
+   is deferred for production hardening.
+4. **`/api/health` is unauthenticated.** It exposes only booleans, but it
+   should be restricted before production deployment.
+5. **No live email delivery provider credentials configured.** `PatientEmail`
+   transitions to `PROVIDER_NOT_CONFIGURED` on send; wire in Resend or SendGrid
+   in production.
+6. **`npm audit` reports 4 high-severity advisories** in `deepmerge-ts` and
+   `mysql2`, both transitive dependencies of the **Prisma CLI** (dev-only).
+   `mysql2` is never loaded on a PostgreSQL datasource. Revisit when Prisma 7.x
+   updates the dependency.
 
 ---
 
 ## Future Improvements
 
-Intentionally not implemented yet:
+Intentionally planned for future phases:
 
-- **Testing** — Vitest for unit tests (the permission matrix and tool argument
-  validation are the highest-value targets), Playwright for E2E.
-- **Row Level Security** — per-organization policies as defence in depth.
-- **Organization switching UI** — the data model supports multiple memberships;
-  there is no switcher.
-- **AI conversation persistence** — `AiConversation` / `AiMessage` tables.
-- **Streaming AI responses** — the provider interface returns a whole result; a
-  `generateStream` method would sit alongside it.
-- **Background jobs** — reminders need a scheduler (Vercel Cron or Supabase
-  Edge Functions).
-- **Rate limiting** — on the AI endpoint especially, since tokens cost money.
-- **Soft deletes** — clinical records generally should not be hard-deleted.
-- **Internationalization** and per-organization timezone handling (the
-  `timezone` column exists but nothing reads it yet).
-- **Observability** — structured logging and error tracking.
+- **External Providers** — Resend / SendGrid email dispatch with webhook receipts;
+  Stripe / Razorpay payment gateway integration with auto-reconciliation.
+- **Outbound Channels** — WhatsApp Business API / Twilio SMS for appointment nudges.
+- **Row Level Security Hardening** — dedicated non-owning PostgreSQL role with
+  `SET LOCAL app.organization_id` per query.
+- **AI Conversation Persistence** — persisting `Ask UniSync` drawer turns into
+  `AiConversation` / `AiMessage` tables in PostgreSQL.
+- **Multi-Practitioner Support** — extending beyond single-administrator clinics to
+  support practitioners, rooms/chairs, and individual shift schedules.
+- **Client-Side Command Idempotency** — generating client UUIDs for `commandId` to
+  prevent duplicate form submissions.
+- **Internationalization & Localization** — dynamic locale formatting and timezone
+  switching for multi-branch organizations.

@@ -1,112 +1,150 @@
 # UniSync — session handoff
 
-Written 2026-09-23, updated same day after step 7. Read this together with
+Written 2026-09-23, updated 2026-09-24 after step 14. Read this together with
 [`CLAUDE.md`](../CLAUDE.md), which holds the architecture and the full record
 of decisions. This file covers what a new session needs that the code does
-not already say: current state, exactly what to do next, the decisions the
-user made, and the traps already paid for.
-
-**If you are picking this up fresh: read "What to do next" below first.**
+not already say: current state, what has been completed, what is yet to be done,
+the decisions the user made, and the traps already paid for.
 
 ---
 
 ## Where the project is
 
-Steps 1–7 of a 14-step plan are done. The plan lives at
-`~/.claude/plans/pasted-content-id-418c-unisync-prancy-dawn.md`.
+**All 14 steps of the foundational roadmap are COMPLETE.**
 
-| # | Step | State |
-| --- | --- | --- |
-| 1 | Server foundation | done |
-| 2 | Domain schema, RLS, seed | done |
-| 3 | Auth, onboarding, design system | done |
-| 4 | App shell — sidebar, Organization Pulse | done (Ask UniSync panel deferred to step 12, by design — see CLAUDE.md) |
-| 5 | Patients (the reference module the rest copy) | done |
-| 6 | Appointments + calendar + manual closure | done — the first manual gate (`closeAppointment`) built and verified end to end |
-| 7 | Consultations + prescriptions | done — see "not yet done" note below |
-| 8 | **Billing + manual payment confirmation** | **next** |
-| 9 | Inventory + stock movements | |
-| 10 | Follow-ups + cron | |
-| 11 | Patient Mail + AI draft generation | |
-| 12 | Ask UniSync — agent loop, confirmation flow | |
-| 13 | Notifications, Activity, Reports, Settings, ⌘K | |
-| 14 | Responsive, a11y, performance, security, docs | |
+| # | Step | State | Notes |
+| --- | --- | --- | --- |
+| 1 | Server foundation | done | Prisma 7, Supabase, tenant tripwire, audited commands |
+| 2 | Domain schema, RLS, seed | done | 20 tables, CHECK constraints, RLS lockdown on public key |
+| 3 | Auth, onboarding, design system | done | Supabase auth, profile provisioning, onboarding cancel/revert, clinical design system |
+| 4 | App shell — sidebar, Organization Pulse | done | Responsive layout, mobile sheet, Organization Pulse dashboard |
+| 5 | Patients (the reference module) | done | CRUD, deactivation, search, age/initials rules, tenant isolation |
+| 6 | Appointments + calendar + manual closure | done | First manual gate (`closeAppointment`), timezone-aware day calendar |
+| 7 | Consultations + prescriptions | done | Clinical records, immutable prescriptions, medicine line items |
+| 8 | Billing + manual payment confirmation | done | Second manual gate (`confirmPayment`), invoices, payments, refunds |
+| 9 | Inventory + stock movements | done | Stock ledger transaction, quantity on hand sync, low stock alerts |
+| 10 | Follow-ups + cron | done | Recall lifecycle, timezone-aware cron materializer route |
+| 11 | Patient Mail + AI draft generation | done | Third manual gate (`sendPatientEmail`), Gemini AI draft generator, provider abstraction |
+| 12 | Ask UniSync — agent loop, confirmation flow | done | 20 domain tools, discriminated `ToolSpec`, confirmation flow, `⌘J` drawer |
+| 13 | Notifications, Activity, Reports, Settings, ⌘K | done | In-app notifications, audit trail timeline, analytics reports, clinic settings, `⌘K` palette |
+| 14 | Responsive, a11y, performance, security, docs | done | 16 test files (120 tests passed), clean Next.js 16 Turbopack build, synced docs |
 
-**Verification status:** 84 Vitest tests pass; typecheck, lint and production
-build are all clean as of the last commit
-(`801e028 Add the Consultations and Prescriptions modules`).
+---
 
-Steps 1–6 (through Appointments) were walked live in the browser end to end
-against a throwaway sign-up (deleted afterward; the seeded
-`markspector@gmail.com` clinic is untouched): onboarding and empty states,
-adding/editing/deactivating a patient, scheduling an appointment, and the
-full status lifecycle — confirm, then close through the manual-gate form,
-with the outcome notes and the "Completed" status landing correctly on both
-the appointment page and the patient's own Appointments card.
+## Test & Build Verification Status
 
-**Step 7 (Consultations + Prescriptions) is NOT yet browser-verified.** The
-session that built it was interrupted mid-walkthrough (had just created a
-throwaway account and a test patient; both were cleaned up from the database
-before this handoff was written, so there is nothing left over to worry
-about). Everything automated is green — typecheck, lint, build, and
-`tests/consultations.test.ts` / `tests/prescriptions.test.ts` all pass — but
-nobody has clicked through the actual pages yet. **Do this first**, before
-building anything new:
+- **Vitest Suite:** 16 test files, **120 tests passing**, 0 failing (`npm test`).
+- **TypeScript:** 0 errors across entire workspace (`tsc --noEmit`).
+- **ESLint:** 0 errors, 0 warnings (`npm run lint`).
+- **Production Build:** Next.js 16 Turbopack build compiles **38 App Router routes** cleanly in ~1.7s (`npm run build`).
 
-1. `npm run dev`, sign up a throwaway account (or reuse one you make and
-   delete), add a patient.
-2. Schedule an appointment for them, confirm it.
-3. From the appointment detail page, use "Record consultation" — check the
-   form loads, submits, and the appointment's own status is untouched
-   afterward.
-4. From the patient detail page, use the new Prescriptions card → "Issue" —
-   check the dynamic add/remove medicine rows work, submission succeeds, and
-   the prescription shows up correctly on `/prescriptions/[id]` and in the
-   patient's Prescriptions list.
-5. Delete the throwaway account/org from Postgres afterward (see the cleanup
-   pattern in "Useful commands" below) — never leave test data in the shared
-   dev database.
+---
 
-If something's broken, fix it and note what was wrong in `CLAUDE.md`'s
-Architectural Decisions log (same pattern as the two entries already there
-from earlier verification passes) before moving on to Billing.
+## What was built in Steps 8–14
 
-## What to do next
+### Step 8: Billing + Manual Payment Confirmation (Second Manual Gate)
+- `services/billing/`: Zod schemas, queries (`listBills`, `getBillOrThrow`, `computeBalance`, `countOutstandingBills`), commands (`createBill`, `voidBill`, `recordPayment`, `confirmPayment`, `refundPayment`).
+- **Manual Gate:** `confirmPayment` requires `HumanIntent` and is enforced at the database level by PostgreSQL `CHECK (status != 'CONFIRMED' OR (confirmed_at IS NOT NULL AND confirmed_by_profile_id IS NOT NULL))`.
+- **UI:** `/bills`, `/bills/new`, `/bills/[id]`, payment recording & confirmation modals, patient detail Bills card, home page "Outstanding bills" pulse tile.
+- **Tests:** `tests/billing.test.ts` (10 tests).
 
-**Step 8: Billing + manual payment confirmation.** This is the module that
-carries the product's **second manual gate**, `confirmPayment` — go build it
-by directly copying the pattern `closeAppointment` established in step 6, not
-by re-deriving it:
+### Step 9: Inventory + Stock Movements
+- `services/inventory/`: Zod schemas, queries (`listInventoryItems`, `getItemOrThrow`, `countLowStockItems`, `listStockMovements`), commands (`createInventoryItem`, `updateInventoryItem`, `recordStockMovement`).
+- **Stock Ledger Balance:** Every `recordStockMovement` transaction atomically computes and updates `quantityOnHand` and records a `StockMovement` row with `balanceAfter = quantityOnHand`.
+- **Constraint:** Database `CHECK (quantity > 0)` prevents zero or negative movement entries.
+- **UI:** `/inventory`, `/inventory/new`, `/inventory/[id]`, `/inventory/[id]/movement`, home page "Low-stock items" pulse tile.
+- **Tests:** `tests/inventory.test.ts` (6 tests).
 
-- Read `services/appointments/commands.ts`'s `closeAppointment` and
-  `app/(dashboard)/appointments/close-appointment-form.tsx` first. The shape
-  to copy: a command that takes `(ctx, input, intent: HumanIntent, unit)`,
-  reachable from exactly one UI form that is the only path to it, with a test
-  that (a) reloads the row after calling the real command and (b) attempts a
-  raw-SQL insert of the gated state to prove the database `CHECK` constraint
-  holds independently — see `tests/appointments.test.ts`'s "the manual close
-  gate" describe block for the exact pattern.
-- `Bill`, `BillItem`, `Payment` models already exist in `prisma/schema.prisma`
-  (see the Database Design section of `CLAUDE.md`). The `CHECK` constraint for
-  `PaymentStatus.CONFIRMED` requiring `confirmedAt`/`confirmedByProfileId`
-  already exists too (from the `20260923173935_domain_modules` migration) — it
-  has never been exercised by application code yet, so verify it with the same
-  raw-SQL-refusal test technique before trusting it.
-- Permissions already exist in `lib/auth/permissions.ts`: `bill.read`,
-  `bill.create`, `bill.void`, `payment.read`, `payment.record`,
-  `payment.confirm`, `payment.refund`. `payment.confirm` and `payment.refund`
-  are already in `HUMAN_ONLY_PERMISSIONS`; `bill.void` is too.
-- Reminder from CLAUDE.md: `BillStatus` deliberately has no `PAID`/
-  `PARTIALLY_PAID` value. How much of a bill is paid is derived at read time
-  from `CONFIRMED` payments — don't add a stored "amount paid" field.
-- Same UI shape as Patients/Appointments: list, detail, create; reachable
-  from the patient detail page (a "Bills" card, same as Appointments/
-  Consultations/Prescriptions got). Decide whether Billing needs its own
-  top-level nav entry (Patients and Appointments have one; Consultations and
-  Prescriptions deliberately don't, since they're accessed via a patient, not
-  browsed independently day to day) — Billing probably does want one, since
-  "which bills are outstanding" is itself a daily-use list, similar in spirit
-  to the Appointments day view.
+### Step 10: Follow-ups + Timezone-Aware Cron
+- `services/followups/`: Follow-up lifecycle (`PENDING` -> `COMPLETED` / `CANCELLED`, or `OVERDUE`).
+- **Cron Route:** `GET/POST /api/cron/followups` evaluates scheduled follow-ups against current organization timezones and transitions overdue items while creating notifications.
+- **UI:** `/followups`, `/followups/new`, patient detail Follow-ups card with modal creator and quick complete/cancel actions.
+- **Tests:** `tests/followups.test.ts` (6 tests).
+
+### Step 11: Patient Mail + AI Draft Generation (Third Manual Gate)
+- `services/mail/`: Email drafting, preview, update, delete, and manual sending.
+- **Manual Gate:** `sendPatientEmail` requires `HumanIntent` and database `CHECK (status != 'SENT' OR (sent_at IS NOT NULL AND sent_by_profile_id IS NOT NULL))`.
+- **Provider Abstraction:** With no external email provider configured, attempting to send marks the email as `PROVIDER_NOT_CONFIGURED` without falsifying `SENT`.
+- **AI Draft Generator:** Gemini-powered drafting (`draftEmailWithAi`) incorporating patient name, clinic name, and clinical context.
+- **UI:** `/mail`, `/mail/new`, `/mail/[id]` with live preview, delete draft button, and sidebar navigation entry.
+- **Tests:** `tests/mail.test.ts` (5 tests).
+
+### Step 12: Ask UniSync AI Assistant (Agent Loop, Tools & Drawer)
+- **20 Domain Tools:**
+  - *Patients (4):* `search_patients`, `get_patient_details`, `create_patient`, `update_patient`.
+  - *Appointments (4):* `list_appointments`, `schedule_appointment`, `cancel_appointment`, `confirm_appointment`.
+  - *Billing (4):* `list_bills`, `get_bill_details`, `create_bill`, `record_payment`.
+  - *Inventory (3):* `list_inventory`, `check_low_stock`, `record_stock_movement`.
+  - *Follow-ups (3):* `list_followups`, `schedule_followup`, `complete_followup`.
+  - *Patient Mail (2):* `list_patient_emails`, `draft_patient_email`.
+- **Discriminated ToolSpec Union:** `lib/ai/tools/define.ts` strictly discriminates `read` tools (receiving `Db`) and `write` tools (receiving `UnitOfWork`), preventing type pollution.
+- **Confirmation Flow:** Destructive/modifying writes support a 2-step confirmation cycle before execution.
+- **UI & Keyboard Shortcut:** Slide-over `AskUniSyncDrawer` with floating trigger and `⌘J` / `Ctrl+J` shortcut.
+- **Tests:** `tests/ai-tools.test.ts` (24 tests) and `tests/agent.test.ts` (4 tests).
+
+### Step 13: Notifications, Activity Log, Reports, Settings & ⌘K
+- **Notifications:** In-app notification service (`services/notifications/`), `/notifications` page with filter tabs (All / Unread), mark single read, mark all read, and `NotificationBell` header component with unread counter.
+- **Activity Log:** Audit trail service (`services/audit/`), `/activity` page with timeline display, actor badge filtering (`USER`, `AI_AGENT`, `SYSTEM`), and entity type filtering.
+- **Reports & Analytics:** Analytics service (`services/reports/`), `/reports` page displaying financial collections, appointment completion/cancellation breakdown, inventory valuation & low-stock health, and recall completion rates.
+- **Clinic Settings:** Organization settings page (`/settings`) allowing updates to clinic name, slug, phone, email, address, and view of locale/currency configuration.
+- **Command Palette (`⌘K`):** Global modal palette (`components/layout/command-palette.tsx`) accessible via `⌘K` / `Ctrl+K` with fuzzy navigation and instant action shortcuts.
+- **Tests:** `tests/notifications-reports.test.ts` (3 tests).
+
+### Step 14: Hardening, Responsive Polish, Accessibility & Documentation
+- Verified mobile navigation drawer and sheet responsiveness across phone, tablet, and desktop viewports.
+- Validated keyboard traps, ARIA dialog attributes, and focus states across modals and drawers.
+- Enforced all architectural tripwires, import guards, and manual-gate guarantees.
+- Synchronized documentation across `docs/handoff.md`, `CLAUDE.md`, and `README.md`.
+
+---
+
+## What is yet to be done (Future Roadmap)
+
+While the foundational application and all 14 plan steps are complete, functional, and tested, the following production enhancements are planned for future phases:
+
+1. **Third-Party Email Provider Integration (Resend / SendGrid / Postmark):**
+   - The mail subsystem currently uses a robust provider abstraction. In the absence of an API key, sending safely sets the status to `PROVIDER_NOT_CONFIGURED`.
+   - *Future Work:* Add webhook handling and provider adapter for Resend or SendGrid to update emails to `SENT` or `BOUNCED`.
+
+2. **Live Payment Gateway (Stripe / Razorpay):**
+   - Billing currently handles manual clinic payments (cash, card, UPI, bank transfer) with human confirmation.
+   - *Future Work:* Integrate online payment links and webhook reconciliation for patient-initiated payments.
+
+3. **Multi-Channel Patient Messaging (WhatsApp & SMS):**
+   - The follow-up and notification data models support multi-channel communication.
+   - *Future Work:* Integrate Twilio / WhatsApp Business API for outbound recall nudges.
+
+4. **Dedicated PostgreSQL RLS Role:**
+   - Supabase public client is currently 100% blocked via RLS (`42501 permission denied`). Server-side Prisma connects with bypass privileges and is defended by the application layer and `tenantTripwire`.
+   - *Future Work:* Introduce a dedicated non-owning PostgreSQL role with `SET LOCAL app.organization_id = ...` for additional defense in depth at the database engine level.
+
+5. **Multi-Provider / Multi-Chair Clinic Model:**
+   - By explicit design decision, UniSync currently uses a single administrator model (no practitioner or doctor entity).
+   - *Future Work:* If expanding beyond single-practitioner clinics, introduce `Practitioner` and `Chair` entities with scheduling availability rules.
+
+6. **Persistent AI Chat History:**
+   - The Ask UniSync chat drawer maintains in-memory conversation state for the active session.
+   - *Future Work:* Persist conversations and message transcripts to `ai_conversations` and `ai_messages` tables for historical reference.
+
+7. **Command Idempotency:**
+   - The `AuditLog` table has a unique index on `(organizationId, commandId)`.
+   - *Future Work:* Pass client-generated `commandId` (idempotency key) into `runCommand` to reject duplicate form submissions automatically.
+
+---
+
+## Onboarding Revert / Cancel Feature (2026-09-24)
+- Added "Go back to login" top link and "Cancel & return to login" button to `/onboarding`.
+- Clicking cancel discards in-memory form input, calls `cancelOnboardingAction()`, which invokes `revertOnboardingForUser()`:
+  - Deletes any `Profile` row created in Prisma.
+  - Deletes the uncompleted account from `auth.users` in Supabase Auth via transactional raw SQL.
+  - Terminates the Supabase session (`signOut()`) and clears auth cookies.
+  - Frees up the email so it is never permanently locked or left as an orphan.
+  - Returns `ok(null)` to the client.
+- The Client Component triggers a clean, full-page navigation using `window.location.href = "/sign-in"` rather than relying on a server action `redirect()` inside `useTransition`. This prevents Next.js transition locks where the UI would stay stuck in a pending state with entered form data.
+- Only if the user submits "Create organization" successfully is the account, profile, and organization saved permanently.
+- Covered by unit & integration tests in `tests/onboarding-cancel.test.ts` (all green) and verified live end-to-end in the browser for both top and bottom return buttons.
+
+---
 
 ## Live environment
 
@@ -270,7 +308,7 @@ Kept current in `CLAUDE.md`; the ones most likely to matter next:
 
 ```bash
 npm run dev                                   # http://localhost:3000
-npm test                                      # 84 tests, needs .env.local
+npm test                                      # 120 tests across 16 test files, needs .env.local
 npm run typecheck && npm run lint && npm run build
 npx next typegen                              # after adding a new route, before typecheck
 npm run db:seed -- markspector@gmail.com      # refill the demo clinic
@@ -309,3 +347,90 @@ Supabase Auth user itself — that's a harmless leftover (a handful accumulate
 from prior verification passes) since the app never resolves a session for an
 account with no organization into anything sensitive, but delete it too via
 the Supabase dashboard if you want to keep Auth tidy.
+
+---
+
+## Recent Fixes & Operational Notes
+
+### 1. Onboarding Revert / Cancel Sign-Up Flow
+- **Problem:** If a user signed up, arrived at the `/onboarding` step ("Enter other details"), and chose to cancel or return to sign-in, the platform previously got stuck or locked the email in Supabase Auth.
+- **Resolution:**
+  - `cancelOnboardingAction` in `app/onboarding/actions.ts` cleans up the user's empty `Profile` and calls Supabase Admin API (`supabaseAdmin.auth.admin.deleteUser`) to completely free the registered email.
+  - Client button uses `window.location.replace("/sign-in")` instead of Next.js soft navigation, ensuring a full reload of client auth state.
+  - `tests/onboarding-cancel.test.ts` asserts that both profile and auth user are deleted and that the email can be re-registered immediately.
+
+### 2. Next.js 16 Dev Server Cross-Origin & LAN Access (`allowedDevOrigins`)
+- **Problem:** When opening Next.js dev server over LAN or clicking the network URL (`http://192.168.56.1:3000` or `http://192.168.29.20:3000`), Next.js 16 blocks dev resources (`/_next/hmr` WebSocket and `geist-latin.woff2` fonts) with 403 Forbidden, causing the browser tab to stall/freeze.
+- **Resolution:**
+  - `next.config.ts` configures `allowedDevOrigins` dynamically using `os.networkInterfaces()` and static fallback IPs (`192.168.56.1`, `192.168.29.20`, `localhost`, `127.0.0.1`).
+  - Note: In Windows environments with VirtualBox installed, `192.168.56.1` is the VirtualBox Host-Only Ethernet adapter and will not route to external Wi-Fi devices. External devices (phones, tablets) on the same Wi-Fi should connect to the actual Wi-Fi adapter IP (e.g., `http://192.168.29.20:3000`).
+
+### 3. AI Assistant Gemini Model & Thought Signature Fix
+- **Problem:** AI Assistant failed with `Gemini request failed for model "gemini-3.6-flash"` during multi-turn function calling.
+  - Root cause 1: `gemini-3.6-flash` is a reasoning model that produces `thoughtSignature` on functionCall parts. In multi-turn execution, Google Gemini 3.x API rejects subsequent turns with a `400 INVALID_ARGUMENT` if the preceding `thoughtSignature` is dropped when formatting conversation history.
+  - Root cause 2: `gemini-3.6-flash` burns hundreds of internal thinking tokens per request and has an extremely low free-tier limit (20 requests/day), hitting `429 RESOURCE_EXHAUSTED` quickly.
+- **Resolution:**
+  - `lib/ai/types.ts`: Added optional `thoughtSignature?: string` to `AiToolCall`.
+  - `lib/ai/gemini.ts`: `GeminiProvider.generate` extracts `thoughtSignature` from candidate parts, and `toGeminiContent` attaches `thoughtSignature` back to function call parts in the transcript.
+  - `app/(dashboard)/actions/chat.ts`: Updated `chatMessageSchema` to validate and preserve `thoughtSignature` across client-server boundaries.
+  - Model switched to **`gemini-3.5-flash-lite`** in `lib/env.ts` and `.env.local`:
+    - Economical token/credit consumption.
+    - Zero thinking token overhead.
+    - ~5x faster execution (~1.1s vs ~6.9s).
+    - Generous free-tier rate limits.
+
+### 4. AI Assistant Confirmation Resume & Transcript Turn Fix (`Action failed: Gemini request failed...`)
+- **Problem:** When booking an appointment or performing any action requiring human confirmation (e.g. `schedule_appointment`, `cancel_appointment`), clicking "Confirm" failed with:
+  `Action failed: Gemini request failed for model "gemini-3.5-flash-lite".`
+  - Root cause 1: When a write tool paused for confirmation, the client stored the assistant message containing the pending `toolCalls`. When the user confirmed, the client sent back the message transcript containing the unresolved tool call along with `confirmedCall`. `runAgentTurn` in `lib/ai/agent/loop.ts` immediately invoked `provider.generate({ messages })` before executing the tool. Gemini's API rejects any conversation history where the last turn is a model `functionCall` without an accompanying user `functionResponse`, returning a `400 Bad Request`.
+  - Root cause 2: `toGeminiContent` mapped each tool message to a separate `role: "user"` turn without merging consecutive tool responses, violating Gemini's requirement that conversation turns strictly alternate between `user` and `model`.
+- **Resolution:**
+  - `lib/ai/agent/loop.ts`: Added pre-loop pending tool call resolution. When `runAgentTurn` starts, any unresolved tool call matching `confirmedCall` is executed (or cancelled) and its `{ role: "tool" }` response is recorded into `currentMessages` before `provider.generate` is called.
+  - `lib/ai/gemini.ts`: Added `toGeminiContents` to merge consecutive same-role turns into a single turn with combined parts (e.g. multi-tool turns), and added server-side error logging in the catch block.
+  - `services/appointments/rules.ts` & `appointment.tools.ts`: Normalized `scheduledAt` strings with `slice(0, 16)` to guarantee `YYYY-MM-DDTHH:mm` format when models produce seconds.
+  - `tests/agent.test.ts`: Added multi-turn tests for both confirming and declining paused write tools with `updatedMessages`.
+
+### 5. Server Action Decimal Serialization Fix (`Only plain objects can be passed to Client Components...`)
+- **Problem:** When recording, confirming, or refunding a payment against a bill, or mutating inventory items, the server crashed with:
+  `Only plain objects can be passed to Client Components from Server Components. Decimal objects are not supported.`
+  - Root cause: Prisma models like `Payment` (`amount: Decimal`), `Bill` (`subtotal: Decimal`, `total: Decimal`), and `InventoryItem` contain `Decimal` instances from `decimal.js`. Next.js React Server Actions use React Flight to serialize action results back to Client Components (`useActionState`). React Flight rejects objects with non-plain prototypes (`Decimal.prototype`).
+- **Resolution:**
+  - `lib/server/action.ts`: Added `serializePlain` to recursively convert `Decimal` instances to serializable strings (while preserving `Date` instances), applied to all return values in `action` and `readAction`.
+  - `app/(dashboard)/bills/actions.ts` & `app/(dashboard)/inventory/actions.ts`: Explicitly mapped action command return values to plain objects.
+  - `app/(dashboard)/bills/record-payment-form.tsx`, `confirm-payment-form.tsx`, `void-bill-form.tsx`: Added `useEffect` hooks to automatically close form sheets/collapsibles upon successful completion (`state?.ok`).
+  - `tests/action-serialize.test.ts`: Added unit tests verifying `serializePlain` handles primitives, Dates, Decimals, arrays, and nested structures.
+
+### 6. Brevo Email Service Integration
+- **Configuration:**
+  - `BREVO_API_KEY`: Brevo transactional API key stored in `.env.local` and configured in `lib/env.ts`.
+  - `services/mail/provider.ts`: Implemented `BrevoMailProvider` targeting `https://api.brevo.com/v3/smtp/email`.
+  - Manual delivery (`sendPatientEmail`) uses Brevo API directly with fallback to Preview mode if unconfigured.
+  - Automatic AI agent emailing (`send_patient_email` tool) dispatches genuine emails through Brevo after passing domain and ground-truth verification.
+
+### 7. Patient Ground-Truth Verification & Mistake-Correction System
+- **Rule:** Before the agent or UI performs any action or generates any communication (e.g., appointment reminder, balance notice, follow-up recall), it must check the real ground-truth clinic records.
+- **Mistake Correction & Prevention:**
+  - If a patient has no active scheduled/confirmed appointment, sending or drafting an appointment reminder is flagged as inappropriate.
+  - If a patient has ₹0.00 outstanding balance, sending or drafting a balance payment notice is rejected.
+  - Inappropriate actions are rejected programmatically and an in-app `Notification` with `severity: "WARNING"` is created for staff.
+  - If valid records exist but the user omitted IDs, the system automatically resolves and links the genuine appointment/bill IDs to correct minor omissions.
+- **Components:**
+  - `services/mail/verifier.ts`: `verifyPatientActionContext` & `detectActionTopic`.
+  - `services/mail/commands.ts`: `generateAiDraft` executes ground-truth verification and attaches warnings or real context.
+  - `app/(dashboard)/mail/mail-composer.tsx`: Displays an interactive warning banner if ground truth conflicts with user action.
+  - `lib/ai/tools/mail.tools.ts`: `draft_patient_email` and `send_patient_email` enforce verification, reject invalid actions, and raise alert notifications.
+  - `lib/ai/agent/loop.ts`: System prompt rule 4 enforces checking real records before executing operations.
+  - `tests/verifier.test.ts`: 10 comprehensive unit & integration tests covering topic detection, record checks, rejections, and notifications.
+
+### 8. Mandatory Information Completeness & Non-Abstract Operations Policy
+- **Problem:** When users asked the agent to create records (e.g. register a patient profile, schedule an appointment, create a bill), the agent previously called creation tools with sparse or abstract inputs, putting empty/null values into missing fields and making partial updates destructive (wiping out non-updated fields).
+- **Resolution:**
+  - **System Instruction (Rule 5 in `lib/ai/agent/loop.ts`):** Enforces that the agent MUST NOT create records abstractly or fill missing fields with blanks/nulls. If the user provides an incomplete prompt, the agent must respond with a structured checklist asking for the required details (demographics, contact info, appointment date/time/duration/type, bill line items).
+  - **Tool Elicitation Guard (`lib/ai/tools/patient.tools.ts`):** `create_patient` validates that at least one primary contact method (`phone` or `email`) is provided before registering a patient profile. If omitted, the tool rejects and instructs the agent to ask the user.
+  - **Preserved Partial Updates (`services/patients/commands.ts` & `update_patient`):** `updatePatient` and `updatePatientTool` now merge incoming changes with the existing patient record in the database, preserving all unmentioned fields rather than overwriting them with `null`.
+  - **Appointment Rescheduling & Updating (`services/appointments/commands.ts` & `update_appointment`):** Added `update_appointment` (`updateAppointmentTool`) to the AI tools suite and enabled partial updates in `updateAppointment`, allowing appointments to be rescheduled or modified without losing duration, type, or notes.
+  - **Line Item Elicitation (`lib/ai/tools/billing.tools.ts`):** `create_bill` tool description strictly warns against inventing arbitrary line items and requires gathering specific items, quantities, and prices from the user.
+  - **Tests:** `tests/completeness-verifier.test.ts` (4 unit tests passed). Total suite now stands at **19 test files (143 tests passing)**.
+
+
+

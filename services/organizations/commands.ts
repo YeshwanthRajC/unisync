@@ -6,6 +6,7 @@ import type { OrganizationContext } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
 import { ConflictError } from "@/lib/server/errors";
 import type { UnitOfWork } from "@/lib/server/unit";
+import { userHasOrganization } from "@/services/organizations/queries";
 import {
   type CreateOrganizationInput,
   type UpdateOrganizationInput,
@@ -112,4 +113,30 @@ export async function updateOrganization(
   unit.note({ name: organization.name, timezone: organization.timezone });
 
   return organization;
+}
+
+/**
+ * Reverts the sign-up process for a user who has not yet completed onboarding.
+ *
+ * Deletes any provisioned Profile row and deletes the user from `auth.users`
+ * so their email and credentials are not permanently stored if they cancel.
+ * Throws ConflictError if the user already has an active organization.
+ */
+export async function revertOnboardingForUser(userId: string): Promise<void> {
+  const hasOrg = await userHasOrganization(userId);
+  if (hasOrg) {
+    throw new ConflictError(
+      "Cannot cancel onboarding for an active organization member.",
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.profile.deleteMany({
+      where: { id: userId },
+    });
+    await tx.$executeRawUnsafe(
+      "DELETE FROM auth.users WHERE id = $1::uuid",
+      userId,
+    );
+  });
 }

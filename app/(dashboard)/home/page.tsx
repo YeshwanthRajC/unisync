@@ -1,6 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { CalendarDaysIcon, UsersIcon } from "lucide-react";
+import {
+  BoxesIcon,
+  CalendarDaysIcon,
+  ReceiptIcon,
+  UsersIcon,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +17,8 @@ import {
   countActivePatients,
   listRecentPatients,
 } from "@/services/patients";
+import { countOutstandingBills } from "@/services/billing";
+import { countLowStock } from "@/services/inventory";
 
 export const metadata: Metadata = { title: "Home" };
 
@@ -32,6 +39,8 @@ export default async function HomePage() {
     listRecentPatients(ctx, 5),
   ]);
   const upcomingToday = await countUpcomingToday(ctx, organization.timezone);
+  const outstandingBills = await countOutstandingBills(ctx);
+  const lowStockItems = await countLowStock(ctx);
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-8">
@@ -44,7 +53,7 @@ export default async function HomePage() {
         </p>
       </header>
 
-      <div className="mb-4 grid gap-4 sm:grid-cols-2">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Link href="/patients">
           <Card className="h-full transition-shadow hover:shadow-sm">
             <CardHeader>
@@ -66,12 +75,44 @@ export default async function HomePage() {
             <CardHeader>
               <CardTitle className="text-muted-foreground flex items-center gap-2 text-sm font-medium">
                 <CalendarDaysIcon className="size-4" aria-hidden="true" />
-                Appointments left today
+                Appointments today
               </CardTitle>
             </CardHeader>
             <CardContent>
               <p className="font-heading text-3xl font-semibold">
                 {upcomingToday}
+              </p>
+            </CardContent>
+          </Card>
+        </Link>
+
+        <Link href="/bills">
+          <Card className="h-full transition-shadow hover:shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-muted-foreground flex items-center gap-2 text-sm font-medium">
+                <ReceiptIcon className="size-4" aria-hidden="true" />
+                Outstanding bills
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="font-heading text-3xl font-semibold">
+                {outstandingBills}
+              </p>
+            </CardContent>
+          </Card>
+        </Link>
+
+        <Link href="/inventory?lowStock=true">
+          <Card className={`h-full transition-shadow hover:shadow-sm ${lowStockItems > 0 ? "border-amber-300 bg-amber-50/20" : ""}`}>
+            <CardHeader>
+              <CardTitle className="text-muted-foreground flex items-center gap-2 text-sm font-medium">
+                <BoxesIcon className="size-4" aria-hidden="true" />
+                Low stock alerts
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className={`font-heading text-3xl font-semibold ${lowStockItems > 0 ? "text-amber-700" : ""}`}>
+                {lowStockItems}
               </p>
             </CardContent>
           </Card>

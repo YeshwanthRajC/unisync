@@ -1,5 +1,16 @@
 import type { LucideIcon } from "lucide-react";
-import { CalendarDaysIcon, HomeIcon, UsersIcon } from "lucide-react";
+import {
+  BarChart3Icon,
+  BoxesIcon,
+  CalendarDaysIcon,
+  HistoryIcon,
+  HomeIcon,
+  ListTodoIcon,
+  MailIcon,
+  ReceiptIcon,
+  SettingsIcon,
+  UsersIcon,
+} from "lucide-react";
 
 import type { Permission } from "@/lib/auth/permissions";
 
@@ -31,4 +42,47 @@ export const NAV_ITEMS: readonly NavItem[] = [
     icon: CalendarDaysIcon,
     permission: "appointment.read",
   },
+  {
+    href: "/bills",
+    label: "Bills",
+    icon: ReceiptIcon,
+    permission: "bill.read",
+  },
+  {
+    href: "/inventory",
+    label: "Inventory",
+    icon: BoxesIcon,
+    permission: "inventory.read",
+  },
+  {
+    href: "/followups",
+    label: "Follow-ups",
+    icon: ListTodoIcon,
+    permission: "followup.read",
+  },
+  {
+    href: "/mail",
+    label: "Patient Mail",
+    icon: MailIcon,
+    permission: "patient_email.read",
+  },
+  {
+    href: "/reports",
+    label: "Reports",
+    icon: BarChart3Icon,
+    permission: "report.read",
+  },
+  {
+    href: "/activity",
+    label: "Activity Log",
+    icon: HistoryIcon,
+    permission: "audit.read",
+  },
+  {
+    href: "/settings",
+    label: "Settings",
+    icon: SettingsIcon,
+    permission: "organization.read",
+  },
 ];
+

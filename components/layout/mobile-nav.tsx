@@ -15,29 +15,39 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 
+import { NotificationBell } from "@/components/layout/notification-bell";
+
 /**
  * The top bar shown below `lg`, where the fixed sidebar in `app-sidebar.tsx`
  * is hidden. Its drawer reuses the same `NavLinks` list, so the two surfaces
  * can never show different links.
  */
-export function MobileNav({ organizationName }: { organizationName: string }) {
+export function MobileNav({
+  organizationName,
+  unreadNotifications = 0,
+}: {
+  organizationName: string;
+  unreadNotifications?: number;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
     <header className="bg-sidebar text-sidebar-foreground flex h-14 items-center justify-between border-b border-sidebar-border px-4 lg:hidden">
       <Logo className="text-sidebar-foreground [&_span]:text-sidebar-foreground" />
 
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-          >
-            <MenuIcon aria-hidden="true" />
-            <span className="sr-only">Open menu</span>
-          </Button>
-        </SheetTrigger>
+      <div className="flex items-center gap-1.5">
+        <NotificationBell unreadCount={unreadNotifications} />
+        <Sheet open={open} onOpenChange={setOpen}>
+          <SheetTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            >
+              <MenuIcon aria-hidden="true" />
+              <span className="sr-only">Open menu</span>
+            </Button>
+          </SheetTrigger>
         <SheetContent side="left" className="bg-sidebar text-sidebar-foreground flex w-72 flex-col p-0">
           <SheetHeader className="border-b border-sidebar-border">
             <SheetTitle className="text-sidebar-foreground">
@@ -57,6 +67,7 @@ export function MobileNav({ organizationName }: { organizationName: string }) {
           </div>
         </SheetContent>
       </Sheet>
+      </div>
     </header>
   );
 }

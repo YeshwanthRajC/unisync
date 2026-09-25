@@ -69,7 +69,7 @@ export function action<TInput, TOutput>(
         revalidatePath(path);
       }
 
-      return ok(output);
+      return ok(serializePlain(output));
     } catch (error) {
       // MUST come first. `redirect()` and `notFound()` work by throwing, and
       // swallowing them here would turn a redirect into a silent no-op.
@@ -103,7 +103,7 @@ export function readAction<TInput, TOutput>(config: {
     try {
       const ctx = await requirePermission(config.permission);
       const input = config.schema.parse(raw);
-      return ok(await config.run({ input, ctx }));
+      return ok(serializePlain(await config.run({ input, ctx })));
     } catch (error) {
       unstable_rethrow(error);
       const mapped = mapError(error, `read:${config.name}`);
@@ -117,4 +117,45 @@ export function readAction<TInput, TOutput>(config: {
       };
     }
   };
+}
+
+/**
+ * Recursively convert any Decimal instances or non-plain class instances into
+ * plain serializable values (e.g. Decimal -> string) so they can safely pass
+ * the Server Action React Flight boundary to Client Components.
+ */
+export function serializePlain<T>(value: T): T {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  // Handle Decimal objects (Prisma Decimal, decimal.js, etc.)
+  if (
+    typeof value === "object" &&
+    typeof (value as Record<string, unknown>).toFixed === "function" &&
+    typeof (value as Record<string, unknown>).toNumber === "function"
+  ) {
+    return (value as { toString(): string }).toString() as unknown as T;
+  }
+
+  // Preserve native Dates (supported by React Flight)
+  if (value instanceof Date) {
+    return value;
+  }
+
+  // Handle arrays
+  if (Array.isArray(value)) {
+    return value.map(serializePlain) as unknown as T;
+  }
+
+  // Handle plain objects and Prisma model instances
+  if (typeof value === "object") {
+    const plain: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value)) {
+      plain[key] = serializePlain(val);
+    }
+    return plain as T;
+  }
+
+  return value;
 }

@@ -1,10 +1,15 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import { ArrowLeftIcon, Loader2Icon } from "lucide-react";
 
-import { createOrganizationAction } from "@/app/onboarding/actions";
+import {
+  cancelOnboardingAction,
+  createOrganizationAction,
+} from "@/app/onboarding/actions";
 import { Field, FormError } from "@/components/form/field";
 import { SubmitButton } from "@/components/form/submit-button";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -29,6 +34,31 @@ export function OnboardingForm({ suggestedName }: { suggestedName: string }) {
   const [slug, setSlug] = useState(slugify(suggestedName));
   const [slugEdited, setSlugEdited] = useState(false);
 
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  const handleCancel = async () => {
+    if (isCancelling) return;
+    setCancelError(null);
+    setIsCancelling(true);
+    setName("");
+    setSlug("");
+
+    try {
+      const res = await cancelOnboardingAction();
+      if (res && !res.ok) {
+        setCancelError(res.error.message);
+        setIsCancelling(false);
+        return;
+      }
+    } catch {
+      // Even if network or server call throws, proceed to navigate to sign-in
+    }
+
+    // Full page navigation to reset all in-memory React state, Supabase client session and cookies
+    window.location.replace("/sign-in");
+  };
+
   const errors = state?.ok === false ? state.error : undefined;
   const formMessage =
     errors && errors.code !== "VALIDATION" && errors.code !== "CONFLICT"
@@ -37,7 +67,19 @@ export function OnboardingForm({ suggestedName }: { suggestedName: string }) {
 
   return (
     <form action={formAction} className="space-y-4" noValidate>
-      <FormError message={formMessage} />
+      <div className="flex items-center justify-between pb-1">
+        <button
+          type="button"
+          onClick={handleCancel}
+          disabled={isCancelling}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer disabled:opacity-50"
+        >
+          <ArrowLeftIcon className="size-3.5" />
+          {isCancelling ? "Returning to login..." : "Go back to login"}
+        </button>
+      </div>
+
+      <FormError message={cancelError ?? formMessage} />
 
       <Field
         name="name"
@@ -132,7 +174,30 @@ export function OnboardingForm({ suggestedName }: { suggestedName: string }) {
         />
       </div>
 
-      <SubmitButton className="w-full">Create organization</SubmitButton>
+      <div className="space-y-2 pt-2">
+        <SubmitButton className="w-full" disabled={isCancelling}>
+          Create organization
+        </SubmitButton>
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full text-muted-foreground hover:text-foreground"
+          onClick={handleCancel}
+          disabled={isCancelling}
+        >
+          {isCancelling ? (
+            <>
+              <Loader2Icon className="mr-2 size-4 animate-spin" />
+              Discarding data & returning to login...
+            </>
+          ) : (
+            <>
+              <ArrowLeftIcon className="mr-2 size-4" />
+              Cancel & return to login
+            </>
+          )}
+        </Button>
+      </div>
     </form>
   );
 }

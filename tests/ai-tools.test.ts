@@ -142,8 +142,16 @@ describe("defineTool", () => {
 });
 
 describe("tool registry gates", () => {
-  it("is empty until modules contribute tools", () => {
-    expect(Object.keys(AI_TOOL_REGISTRY)).toEqual([]);
+  it("contains all registered domain tools", () => {
+    expect(Object.keys(AI_TOOL_REGISTRY).length).toBe(22);
+    expect(AI_TOOL_REGISTRY.search_patients).toBeDefined();
+    expect(AI_TOOL_REGISTRY.schedule_appointment).toBeDefined();
+    expect(AI_TOOL_REGISTRY.update_appointment).toBeDefined();
+    expect(AI_TOOL_REGISTRY.create_bill).toBeDefined();
+    expect(AI_TOOL_REGISTRY.record_stock_movement).toBeDefined();
+    expect(AI_TOOL_REGISTRY.schedule_followup).toBeDefined();
+    expect(AI_TOOL_REGISTRY.draft_patient_email).toBeDefined();
+    expect(AI_TOOL_REGISTRY.send_patient_email).toBeDefined();
   });
 
   it("REFUSES a tool that claims a human-only permission", () => {

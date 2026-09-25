@@ -51,7 +51,7 @@ export async function createAppointment(
 export async function updateAppointment(
   ctx: OrganizationContext,
   id: string,
-  input: AppointmentFormInput,
+  input: Partial<AppointmentFormInput>,
   unit: UnitOfWork,
 ) {
   const existing = await getAppointmentOrThrow(ctx, id, unit.db);
@@ -60,19 +60,30 @@ export async function updateAppointment(
       "This appointment has already started, closed or been cancelled and can no longer be rescheduled.",
     );
   }
-  if (existing.patientId !== input.patientId) {
-    await getPatientOrThrow(ctx, input.patientId, unit.db);
+  const patientId = input.patientId ?? existing.patientId;
+  if (patientId !== existing.patientId) {
+    await getPatientOrThrow(ctx, patientId, unit.db);
   }
   const organization = await getCurrentOrganization(ctx, unit.db);
+
+  const scheduledAt =
+    input.scheduledAt !== undefined
+      ? zonedTimeToUtc(input.scheduledAt.slice(0, 16), organization.timezone)
+      : existing.scheduledAt;
 
   const appointment = await unit.db.appointment.update({
     where: orgWhere(ctx, { id }),
     data: {
-      patientId: input.patientId,
-      scheduledAt: zonedTimeToUtc(input.scheduledAt, organization.timezone),
-      durationMinutes: input.durationMinutes,
-      type: input.type,
-      notes: input.notes || null,
+      patientId,
+      scheduledAt,
+      durationMinutes: input.durationMinutes ?? existing.durationMinutes,
+      type: input.type ?? existing.type,
+      notes:
+        input.notes !== undefined
+          ? input.notes
+            ? input.notes
+            : null
+          : existing.notes,
     },
   });
 

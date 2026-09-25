@@ -6,6 +6,7 @@
  */
 export {
   createOrganizationForUser,
+  revertOnboardingForUser,
   updateOrganization,
 } from "@/services/organizations/commands";
 export {

@@ -76,6 +76,11 @@ export type AiToolCall = {
   name: string;
   /** Raw, unvalidated arguments as produced by the model. */
   arguments: Record<string, unknown>;
+  /**
+   * Cryptographic thought signature returned by reasoning models (e.g. Gemini 3.x).
+   * Preserved in transcripts so the provider can validate preceding tool calls.
+   */
+  thoughtSignature?: string;
 };
 
 export type AiGenerateRequest = {

@@ -3,12 +3,15 @@
 import { redirect, unstable_rethrow } from "next/navigation";
 
 import { ensureProfile } from "@/lib/auth/provision";
-import { requireUser } from "@/lib/auth/session";
+import { getCurrentUser, requireUser } from "@/lib/auth/session";
 import { mapError } from "@/lib/server/error-mapping";
-import { fail, type ActionResult } from "@/lib/server/result";
+import { fail, ok, type ActionResult } from "@/lib/server/result";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
   createOrganizationForUser,
   createOrganizationSchema,
+  revertOnboardingForUser,
+  userHasOrganization,
 } from "@/services/organizations";
 
 /**
@@ -64,3 +67,40 @@ export async function createOrganizationAction(
 
   redirect("/home");
 }
+
+/**
+ * Cancel onboarding, revert the sign-up process, and return to the login page.
+ *
+ * Removes the Supabase Auth user record and any provisioned Profile row so
+ * that no incomplete registration data is stored permanently. The user's
+ * session is cleared, and ok(null) is returned so client can navigate cleanly.
+ */
+export async function cancelOnboardingAction(): Promise<ActionResult<null>> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) {
+      return ok(null);
+    }
+
+    const hasOrg = await userHasOrganization(user.id);
+    if (hasOrg) {
+      return ok(null);
+    }
+
+    // Sign out from Supabase Auth session first to clear cookies
+    try {
+      const supabase = await createSupabaseServerClient();
+      await supabase.auth.signOut();
+    } catch {
+      // Continue even if session sign-out threw an error
+    }
+
+    // Delete profile and auth.users record
+    await revertOnboardingForUser(user.id);
+    return ok(null);
+  } catch (error) {
+    unstable_rethrow(error);
+    return fail("UNEXPECTED", "Could not cancel onboarding. Please try again.");
+  }
+}
+

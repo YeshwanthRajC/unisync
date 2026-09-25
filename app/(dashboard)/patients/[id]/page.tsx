@@ -7,6 +7,7 @@ import {
   reactivatePatientAction,
 } from "@/app/(dashboard)/patients/actions";
 import { AppointmentStatusBadge } from "@/app/(dashboard)/appointments/status-badge";
+import { BillStatusBadge } from "@/app/(dashboard)/bills/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,6 +21,9 @@ import { listConsultationsForPatient } from "@/services/consultations";
 import { calculateAge, getPatientOrThrow, initialsFor } from "@/services/patients";
 import { getCurrentOrganization } from "@/services/organizations";
 import { listPrescriptionsForPatient } from "@/services/prescriptions";
+import { listBillsForPatient, computeBalance } from "@/services/billing";
+import { listFollowUpsForPatient } from "@/services/followups";
+import { FollowUpStatusBadge } from "@/app/(dashboard)/followups/status-badge";
 
 export async function generateMetadata({
   params,
@@ -42,7 +46,7 @@ export default async function PatientDetailPage({
 }: PageProps<"/patients/[id]">) {
   const { id } = await params;
   const ctx = await loadContext("patient.read");
-  const [patient, organization, appointments, consultations, prescriptions] =
+  const [patient, organization, appointments, consultations, prescriptions, bills, followUps] =
     await Promise.all([
       getPatientOrThrow(ctx, id),
       getCurrentOrganization(ctx),
@@ -55,6 +59,12 @@ export default async function PatientDetailPage({
       roleHasPermission(ctx.role, "prescription.read")
         ? listPrescriptionsForPatient(ctx, id)
         : Promise.resolve([]),
+      roleHasPermission(ctx.role, "bill.read")
+        ? listBillsForPatient(ctx, id)
+        : Promise.resolve([]),
+      roleHasPermission(ctx.role, "followup.read")
+        ? listFollowUpsForPatient(ctx, id)
+        : Promise.resolve([]),
     ]);
 
   const age = calculateAge(patient.dateOfBirth);
@@ -63,6 +73,8 @@ export default async function PatientDetailPage({
   const canScheduleAppointment = roleHasPermission(ctx.role, "appointment.create");
   const canRecordConsultation = roleHasPermission(ctx.role, "consultation.create");
   const canIssuePrescription = roleHasPermission(ctx.role, "prescription.create");
+  const canCreateBill = roleHasPermission(ctx.role, "bill.create");
+  const canCreateFollowUp = roleHasPermission(ctx.role, "followup.create");
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-8">
@@ -280,6 +292,108 @@ export default async function PatientDetailPage({
                       · {prescription.items.length}{" "}
                       {prescription.items.length === 1 ? "medicine" : "medicines"}
                     </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+        <Card className="sm:col-span-2">
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle>Bills</CardTitle>
+            {canCreateBill ? (
+              <Button asChild size="sm" variant="outline">
+                <Link href={{ pathname: "/bills/new", query: { patientId: patient.id } }}>
+                  <PlusIcon aria-hidden="true" />
+                  New bill
+                </Link>
+              </Button>
+            ) : null}
+          </CardHeader>
+          <CardContent className="text-sm">
+            {bills.length === 0 ? (
+              <p className="text-muted-foreground">No bills yet.</p>
+            ) : (
+              <ul className="divide-y">
+                {bills.map((bill) => {
+                  const { balance } = computeBalance(bill.total, bill.payments);
+                  return (
+                    <li key={bill.id} className="flex items-center justify-between gap-3 py-2">
+                      <Link
+                        href={`/bills/${bill.id}`}
+                        className="hover:underline underline-offset-4"
+                      >
+                        {bill.number}{" "}
+                        · {bill.issuedAt
+                          ? new Intl.DateTimeFormat("en-IN", {
+                              timeZone: organization.timezone,
+                              day: "numeric",
+                              month: "short",
+                              year: "numeric",
+                            }).format(bill.issuedAt)
+                          : "Draft"}
+                      </Link>
+                      <div className="flex items-center gap-2">
+                        <BillStatusBadge status={bill.status} />
+                        {bill.status === "ISSUED" && balance.gt(0) ? (
+                          <span className="text-amber-700 text-xs">
+                            {new Intl.NumberFormat("en-IN", {
+                              style: "currency",
+                              currency: organization.currency,
+                              minimumFractionDigits: 0,
+                            }).format(Number(balance.toString()))} due
+                          </span>
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Follow-ups */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base">Follow-ups & Recalls</CardTitle>
+            {canCreateFollowUp ? (
+              <Button size="sm" variant="outline" asChild>
+                <Link
+                  href={{
+                    pathname: "/followups/new",
+                    query: { patientId: patient.id },
+                  }}
+                >
+                  <PlusIcon aria-hidden="true" />
+                  Schedule
+                </Link>
+              </Button>
+            ) : null}
+          </CardHeader>
+          <CardContent className="text-sm">
+            {followUps.length === 0 ? (
+              <p className="text-muted-foreground">No follow-ups scheduled.</p>
+            ) : (
+              <ul className="divide-y">
+                {followUps.map((item) => (
+                  <li
+                    key={item.id}
+                    className="flex items-center justify-between gap-3 py-2"
+                  >
+                    <div>
+                      <p className="font-medium">{item.reason}</p>
+                      <p className="text-muted-foreground text-xs">
+                        Due:{" "}
+                        {new Intl.DateTimeFormat("en-IN", {
+                          timeZone: organization.timezone,
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        }).format(new Date(item.dueDate))}
+                      </p>
+                    </div>
+                    <FollowUpStatusBadge status={item.status} />
                   </li>
                 ))}
               </ul>

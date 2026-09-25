@@ -38,27 +38,34 @@ export type ToolExecuteArgs<TInput> =
   | { input: TInput; ctx: OrganizationContext; mode: "read"; db: Db }
   | { input: TInput; ctx: OrganizationContext; mode: "write"; unit: UnitOfWork };
 
-export type ToolSpec<TInput, TOutput> = {
-  /** snake_case, matching /^[a-z][a-z0-9_]{2,48}$/ — providers are strict here. */
-  name: string;
-  /** Written for the model. Tool-selection accuracy mostly lives in this string. */
-  description: string;
-  permission: Permission;
-  /** AuditLog action name, e.g. "appointment.reschedule". */
-  audit: string;
-  mode: "read" | "write";
-  /**
-   * An object schema. The model's arguments are parsed with it, and the
-   * declaration shown to the model is DERIVED from it, so the two cannot drift.
-   */
-  input: z.ZodType<TInput>;
-  /** Escape hatch for the rare schema the converter cannot express. */
-  parameters?: AiToolDefinition["parameters"];
-  confirmation:
-    | { required: false }
-    | { required: true; describe: (input: TInput) => string };
-  execute: (args: ToolExecuteArgs<TInput>) => Promise<TOutput>;
-};
+export type ToolSpec<TInput, TOutput> =
+  | {
+      /** snake_case, matching /^[a-z][a-z0-9_]{2,48}$/ — providers are strict here. */
+      name: string;
+      /** Written for the model. Tool-selection accuracy mostly lives in this string. */
+      description: string;
+      permission: Permission;
+      /** AuditLog action name, e.g. "appointment.reschedule". */
+      audit: string;
+      mode: "read";
+      input: z.ZodType<TInput>;
+      parameters?: AiToolDefinition["parameters"];
+      confirmation: { required: false };
+      execute: (args: { input: TInput; ctx: OrganizationContext; mode: "read"; db: Db }) => Promise<TOutput>;
+    }
+  | {
+      name: string;
+      description: string;
+      permission: Permission;
+      audit: string;
+      mode: "write";
+      input: z.ZodType<TInput>;
+      parameters?: AiToolDefinition["parameters"];
+      confirmation:
+        | { required: false }
+        | { required: true; describe: (input: TInput) => string };
+      execute: (args: { input: TInput; ctx: OrganizationContext; mode: "write"; unit: UnitOfWork }) => Promise<TOutput>;
+    };
 
 /**
  * The result of validating a model-produced call.

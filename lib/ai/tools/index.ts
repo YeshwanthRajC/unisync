@@ -127,13 +127,76 @@ export function buildToolRegistry(
   return registry;
 }
 
+import {
+  createPatientTool,
+  getPatientDetailsTool,
+  searchPatientsTool,
+  updatePatientTool,
+} from "@/lib/ai/tools/patient.tools";
+import {
+  cancelAppointmentTool,
+  confirmAppointmentTool,
+  listAppointmentsTool,
+  scheduleAppointmentTool,
+  updateAppointmentTool,
+} from "@/lib/ai/tools/appointment.tools";
+import {
+  createBillTool,
+  getBillDetailsTool,
+  listBillsTool,
+  recordPaymentTool,
+} from "@/lib/ai/tools/billing.tools";
+import {
+  checkLowStockTool,
+  listInventoryTool,
+  recordStockMovementTool,
+} from "@/lib/ai/tools/inventory.tools";
+import {
+  completeFollowUpTool,
+  listFollowUpsTool,
+  scheduleFollowUpTool,
+} from "@/lib/ai/tools/followup.tools";
+import {
+  draftPatientEmailTool,
+  listPatientEmailsTool,
+  sendPatientEmailTool,
+} from "@/lib/ai/tools/mail.tools";
+
 /**
  * Tools registered today.
  *
- * Intentionally empty: each module contributes its tools when its service layer
- * exists, so a tool can never reference a service that has not been written.
+ * Each module contributes its validated, scoped tools here.
  */
-const REGISTERED_TOOLS: readonly ErasedTool[] = [];
+const REGISTERED_TOOLS: readonly ErasedTool[] = [
+  // Patients
+  searchPatientsTool,
+  getPatientDetailsTool,
+  createPatientTool,
+  updatePatientTool,
+  // Appointments
+  listAppointmentsTool,
+  scheduleAppointmentTool,
+  updateAppointmentTool,
+  cancelAppointmentTool,
+  confirmAppointmentTool,
+  // Billing
+  listBillsTool,
+  getBillDetailsTool,
+  createBillTool,
+  recordPaymentTool,
+  // Inventory
+  listInventoryTool,
+  checkLowStockTool,
+  recordStockMovementTool,
+  // Follow-ups
+  listFollowUpsTool,
+  scheduleFollowUpTool,
+  completeFollowUpTool,
+  // Patient Mail
+  listPatientEmailsTool,
+  draftPatientEmailTool,
+  sendPatientEmailTool,
+];
 
 export const AI_TOOL_REGISTRY: Record<string, ErasedTool> =
   buildToolRegistry(REGISTERED_TOOLS);

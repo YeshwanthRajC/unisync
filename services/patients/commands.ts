@@ -52,17 +52,47 @@ export async function createPatient(
 export async function updatePatient(
   ctx: OrganizationContext,
   id: string,
-  input: PatientFormInput,
+  input: Partial<PatientFormInput> & { fullName?: string },
   unit: UnitOfWork,
 ) {
   // Confirms the row exists and belongs to this tenant before the write, so a
   // guessed id from another organization gets "not found", never a silent
   // cross-tenant no-op or, via the tripwire, a 500.
-  await getPatientOrThrow(ctx, id, unit.db);
+  const existing = await getPatientOrThrow(ctx, id, unit.db);
+
+  const updatedData = {
+    fullName: input.fullName !== undefined ? input.fullName.trim() : existing.fullName,
+    phone: input.phone !== undefined ? orNull(input.phone) : existing.phone,
+    email: input.email !== undefined ? orNull(input.email) : existing.email,
+    dateOfBirth:
+      input.dateOfBirth !== undefined
+        ? parseDateOfBirth(input.dateOfBirth)
+        : existing.dateOfBirth,
+    gender: input.gender !== undefined ? input.gender : existing.gender,
+    addressLine:
+      input.addressLine !== undefined
+        ? orNull(input.addressLine)
+        : existing.addressLine,
+    city: input.city !== undefined ? orNull(input.city) : existing.city,
+    state: input.state !== undefined ? orNull(input.state) : existing.state,
+    postalCode:
+      input.postalCode !== undefined
+        ? orNull(input.postalCode)
+        : existing.postalCode,
+    emergencyContactName:
+      input.emergencyContactName !== undefined
+        ? orNull(input.emergencyContactName)
+        : existing.emergencyContactName,
+    emergencyContactPhone:
+      input.emergencyContactPhone !== undefined
+        ? orNull(input.emergencyContactPhone)
+        : existing.emergencyContactPhone,
+    notes: input.notes !== undefined ? orNull(input.notes) : existing.notes,
+  };
 
   const patient = await unit.db.patient.update({
     where: orgWhere(ctx, { id }),
-    data: patientData(input),
+    data: updatedData,
   });
 
   unit.target("Patient", patient.id);

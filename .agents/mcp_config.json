@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "brevo": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp.brevo.com/v1/brevo/mcp",
+        "--header",
+        "Authorization: Bearer eyJhcGlfa2V5IjoieGtleXNpYi00MGQ2OTY3N2I5YjQ2ZDdhNWI4M2FkYWI2NTdmZjg3ZTA1NTYxOTY3ZjdjZGQ0YTVmYzFmOGU5YzFjOWFiNDlmLWNIZVF4TWpMd2p0aGhOOXIifQ=="
+      ],
+      "env": {
+        "BREVO_MCP_KEY": "eyJhcGlfa2V5IjoieGtleXNpYi00MGQ2OTY3N2I5YjQ2ZDdhNWI4M2FkYWI2NTdmZjg3ZTA1NTYxOTY3ZjdjZGQ0YTVmYzFmOGU5YzFjOWFiNDlmLWNIZVF4TWpMd2p0aGhOOXIifQ=="
+      }
+    }
+  }
+}

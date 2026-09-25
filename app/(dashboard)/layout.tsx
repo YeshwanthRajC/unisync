@@ -1,5 +1,6 @@
 import { DashboardShell } from "@/components/layout/dashboard-shell";
 import { loadOrganization } from "@/lib/server/guard";
+import { countUnreadNotifications } from "@/services/notifications";
 
 /**
  * Guarded layout for every authenticated route.
@@ -14,9 +15,13 @@ import { loadOrganization } from "@/lib/server/guard";
  */
 export default async function DashboardLayout({ children }: LayoutProps<"/">) {
   const ctx = await loadOrganization();
+  const unreadNotifications = await countUnreadNotifications(ctx);
 
   return (
-    <DashboardShell organizationName={ctx.organizationName}>
+    <DashboardShell
+      organizationName={ctx.organizationName}
+      unreadNotifications={unreadNotifications}
+    >
       {children}
     </DashboardShell>
   );

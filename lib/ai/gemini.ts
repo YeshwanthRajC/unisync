@@ -15,6 +15,7 @@ import {
   type AiGenerateResult,
   type AiMessage,
   type AiObjectParameterSchema,
+  type AiToolCall,
   type AiToolDefinition,
   type AiToolParameterSchema,
   type LlmProvider,
@@ -47,7 +48,7 @@ export class GeminiProvider implements LlmProvider {
     try {
       const response = await this.client.models.generateContent({
         model,
-        contents: request.messages.map(toGeminiContent),
+        contents: toGeminiContents(request.messages),
         config: {
           systemInstruction: request.systemInstruction,
           temperature: request.temperature,
@@ -63,13 +64,35 @@ export class GeminiProvider implements LlmProvider {
         },
       });
 
+      // Extract tool calls from response parts so thoughtSignature is preserved for reasoning models
+      const candidateParts = response.candidates?.[0]?.content?.parts ?? [];
+      const toolCalls: AiToolCall[] = [];
+
+      for (const part of candidateParts) {
+        if (part.functionCall) {
+          toolCalls.push({
+            id: part.functionCall.id,
+            name: part.functionCall.name ?? "",
+            arguments: (part.functionCall.args ?? {}) as Record<string, unknown>,
+            thoughtSignature: (part as { thoughtSignature?: string }).thoughtSignature,
+          });
+        }
+      }
+
+      // Fallback to response.functionCalls if parts didn't yield any
+      if (toolCalls.length === 0 && response.functionCalls?.length) {
+        for (const call of response.functionCalls) {
+          toolCalls.push({
+            id: call.id,
+            name: call.name ?? "",
+            arguments: (call.args ?? {}) as Record<string, unknown>,
+          });
+        }
+      }
+
       return {
         text: response.text ?? "",
-        toolCalls: (response.functionCalls ?? []).map((call) => ({
-          id: call.id,
-          name: call.name ?? "",
-          arguments: (call.args ?? {}) as Record<string, unknown>,
-        })),
+        toolCalls,
         model,
         usage: {
           inputTokens: response.usageMetadata?.promptTokenCount,
@@ -78,6 +101,10 @@ export class GeminiProvider implements LlmProvider {
         },
       };
     } catch (cause) {
+      console.error(
+        `[GeminiProvider] generateContent failed for model "${model}":`,
+        cause,
+      );
       // Surface a provider-neutral error; the raw SDK error may echo request
       // content and must not propagate to the client.
       throw new AiProviderError(
@@ -103,6 +130,31 @@ export class GeminiProvider implements LlmProvider {
  * Note Gemini does not always populate a call `id`, so results are correlated by
  * name and position rather than by id.
  */
+/**
+ * Convert a neutral AiMessage transcript into Gemini Content turns, merging
+ * consecutive turns of the same role (e.g. multiple tool responses) so that
+ * turns strictly alternate between "user" and "model".
+ */
+function toGeminiContents(messages: AiMessage[]): Content[] {
+  const contents: Content[] = [];
+
+  for (const message of messages) {
+    const item = toGeminiContent(message);
+    if (!item.parts || item.parts.length === 0) {
+      continue;
+    }
+
+    const last = contents[contents.length - 1];
+    if (last && last.role === item.role) {
+      last.parts = [...(last.parts ?? []), ...item.parts];
+    } else {
+      contents.push(item);
+    }
+  }
+
+  return contents;
+}
+
 function toGeminiContent(message: AiMessage): Content {
   if (message.role === "tool") {
     return {
@@ -127,7 +179,12 @@ function toGeminiContent(message: AiMessage): Content {
         parts: [
           ...(message.content ? [{ text: message.content }] : []),
           ...message.toolCalls.map((call) => ({
-            functionCall: { name: call.name, args: call.arguments },
+            functionCall: {
+              name: call.name,
+              args: call.arguments,
+              ...(call.id ? { id: call.id } : {}),
+            },
+            ...(call.thoughtSignature ? { thoughtSignature: call.thoughtSignature } : {}),
           })),
         ],
       };

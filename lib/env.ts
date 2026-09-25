@@ -72,14 +72,23 @@ const databaseEnvSchema = z.object({
 
 const aiEnvSchema = z.object({
   GEMINI_API_KEY: nonEmpty,
-  GEMINI_MODEL: z.string().trim().min(1).default("gemini-3.6-flash"),
+  GEMINI_MODEL: z.string().trim().min(1).default("gemini-3.5-flash-lite"),
+});
+
+const brevoEnvSchema = z.object({
+  BREVO_API_KEY: z.string().trim().optional(),
+  BREVO_MCP_API_KEY: z.string().trim().optional(),
+  BREVO_SENDER_EMAIL: z.string().trim().email().default("yeshwanthgamer0@gmail.com"),
+  BREVO_SENDER_NAME: z.string().trim().default("UniSync Clinic"),
 });
 
 export type DatabaseEnv = z.infer<typeof databaseEnvSchema>;
 export type AiEnv = z.infer<typeof aiEnvSchema>;
+export type BrevoEnv = z.infer<typeof brevoEnvSchema>;
 
 let cachedDatabaseEnv: DatabaseEnv | undefined;
 let cachedAiEnv: AiEnv | undefined;
+let cachedBrevoEnv: BrevoEnv | undefined;
 
 /** Connection strings for Prisma. Runtime queries use the pooled URL. */
 export function getDatabaseEnv(): DatabaseEnv {
@@ -93,6 +102,13 @@ export function getAiEnv(): AiEnv {
   assertServer("getAiEnv");
   cachedAiEnv ??= parseOrThrow(aiEnvSchema, process.env, "server");
   return cachedAiEnv;
+}
+
+/** Credentials and sender identity for Brevo email & MCP services. */
+export function getBrevoEnv(): BrevoEnv {
+  assertServer("getBrevoEnv");
+  cachedBrevoEnv ??= parseOrThrow(brevoEnvSchema, process.env, "server");
+  return cachedBrevoEnv;
 }
 
 /**
@@ -134,6 +150,17 @@ export function isDatabaseConfigured(): boolean {
 
 export function isGeminiConfigured(): boolean {
   return nonEmpty.safeParse(process.env.GEMINI_API_KEY).success;
+}
+
+export function isBrevoConfigured(): boolean {
+  const key = process.env.BREVO_API_KEY?.trim();
+  const mcpKey = process.env.BREVO_MCP_API_KEY?.trim();
+  return Boolean((key && key.length > 0) || (mcpKey && mcpKey.length > 0));
+}
+
+export function isBrevoMcpConfigured(): boolean {
+  const mcpKey = process.env.BREVO_MCP_API_KEY?.trim();
+  return Boolean(mcpKey && mcpKey.length > 0);
 }
 
 // ---------------------------------------------------------------------------

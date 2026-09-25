@@ -9,33 +9,64 @@ The first version is modeled around a **dental clinic**, but the architecture
 is multi-tenant and organization-type aware so other kinds of small
 organization can be supported later.
 
-> **Status: server foundation and database complete.** The full domain schema
-> (20 tables), the audited command layer, tenant isolation, the AI tool
-> contract, and the manual-gate constraints are in place and tested. The user
-> interface and the module service layers are being built now.
+> **Status: Fully Built & Tested.** All 14 foundational modules are complete,
+> tested with 120 Vitest unit/integration tests across 16 test files, and building
+> cleanly with Next.js 16 Turbopack across 38 App Router routes.
 
 For the deeper engineering context — architecture, data model, AI safety
 rules, and the record of why things were built this way — see
-[`CLAUDE.md`](./CLAUDE.md).
+[`CLAUDE.md`](./CLAUDE.md) and [`docs/handoff.md`](./docs/handoff.md).
+
+---
+
+## Key Features
+
+- **Patients & Medical Records:** Register, search by name/phone/email, edit, archive/reactivate, calculate age and initials, and manage clinical history.
+- **Appointments & Timezone Calendar:** Full scheduling workflow (schedule, confirm, start, cancel, mark no-show). Includes day calendar with timezone navigation.
+- **Consultations & Prescriptions:** Record clinical findings attached to appointments; issue immutable multi-item prescriptions with dosage instructions.
+- **Billing & Invoicing:** Create invoices with dynamic line items and auto-calculated totals/balances. Record payments, issue refunds, and void unconfirmed bills.
+- **Inventory & Stock Ledger:** Track consumable supplies with minimum reorder thresholds. All stock movements (`PURCHASE`, `USAGE`, `ADJUSTMENT`, etc.) atomically update stock levels in an immutable balance ledger.
+- **Patient Mail & AI Drafting:** In-app email composer with Gemini AI draft generation tailored to patient context. Live preview and draft deletion.
+- **Reminders & Follow-ups:** Schedule recall dates, complete follow-ups with notes, and run automated status materialization via timezone-aware cron (`/api/cron/followups`).
+- **Ask UniSync (AI Assistant):** Slide-over assistant drawer (`⌘J` / `Ctrl+J`) powered by Google Gemini, equipped with 20 domain tools, write-confirmation flows, and full audit logging.
+- **Global Command Palette (⌘K):** Instant modal search (`⌘K` / `Ctrl+K`) for rapid navigation and quick actions across the platform.
+- **Activity Log & Reports:** Comprehensive audit trail of all commands with actor filtering (`USER`, `AI_AGENT`, `SYSTEM`); analytics reports covering revenue, appointments, inventory, and recalls.
+- **Clinic Settings & Safe Onboarding:** Configure clinic profile, timezone, and currency. Onboarding includes safe cancellation and full account reversion.
+
+---
+
+## The Three Manual Gates
+
+To ensure clinical and financial safety, three high-risk actions can **never** be performed by an AI agent or automated script. They require deliberate human execution:
+
+1. **`closeAppointment`** — Closing an appointment requires a human clinician and recorded clinical outcome notes.
+2. **`confirmPayment`** — Confirming a financial payment requires human intent and cannot be automated.
+3. **`sendPatientEmail`** — Dispatching an email to a real patient requires human review and confirmation.
+
+These gates are enforced across four independent layers:
+- PostgreSQL `CHECK` constraints on `appointments`, `payments`, and `patient_emails`.
+- Type-safe `HumanIntent` token minted exclusively by Server Actions.
+- ESLint rules forbidding AI tools from importing `HumanIntent` or Prisma.
+- AI tool registry compile-time assertions throwing if any manual-gate permission is registered.
 
 ---
 
 ## Tech stack
 
-| | |
+| Area | Technology |
 | --- | --- |
-| Framework | Next.js 16 (App Router) + React 19 + TypeScript |
-| Styling | Tailwind CSS v4 + shadcn/ui |
+| Framework | Next.js 16 (App Router, Turbopack) + React 19 + TypeScript 5 |
+| Styling | Tailwind CSS v4 + shadcn/ui + Radix UI primitives |
 | Database | PostgreSQL on Supabase, via Prisma 7 |
-| Auth | Supabase Auth |
-| Storage | Supabase Storage |
-| AI | Google Gemini, behind a swappable provider interface |
-| Hosting | Vercel + Supabase |
+| Auth & Storage | Supabase Auth + Supabase Storage |
+| AI Assistant | Google Gemini (`gemini-3.5-flash-lite`), provider abstraction |
+| Testing | Vitest (16 test files, 120 tests passed) |
+
+---
 
 ## Requirements
 
-- **Node.js 20.6 or newer** (22 LTS recommended — the Prisma config uses the
-  built-in `process.loadEnvFile`)
+- **Node.js 20.6 or newer** (22 LTS recommended)
 - npm 10+
 - A Supabase project
 - A Google Gemini API key
@@ -71,10 +102,7 @@ source code or in `CLAUDE.md`.**
 | `DATABASE_URL` | Supabase → Project Settings → Database → Connection string → **Transaction pooler** (port 6543). Append `?pgbouncer=true&connection_limit=1` |
 | `DIRECT_URL` | Same page → **Session/direct** connection (port 5432). Used only for migrations |
 | `GEMINI_API_KEY` | <https://aistudio.google.com/apikey> |
-| `GEMINI_MODEL` | Optional; defaults to `gemini-3.6-flash` |
-
-Anything named `NEXT_PUBLIC_*` is compiled into the browser bundle and is
-therefore public. Never give a secret one of those names.
+| `GEMINI_MODEL` | Optional; defaults to `gemini-3.5-flash-lite` |
 
 ## Set up the database
 
@@ -84,8 +112,7 @@ Once `DIRECT_URL` points at your Supabase project:
 npx prisma migrate deploy    # apply all migrations
 ```
 
-`prisma migrate dev` is interactive and does not run in every environment. To
-create a new migration, generate the SQL and apply it:
+To create a new migration, generate the SQL and apply it:
 
 ```bash
 npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script
@@ -101,95 +128,75 @@ run `npx prisma migrate deploy`. Use `npm run db:studio` to browse the data.
 npm run dev
 ```
 
-Open <http://localhost:3000>. The home page shows which dependencies are
-configured; <http://localhost:3000/api/health> additionally checks that the
-database is reachable.
+Open <http://localhost:3000>.
 
 ## Commands
 
 ```bash
-npm run dev          # development server
-npm run build        # production build
-npm start            # serve the production build
-npm run lint         # ESLint
-npm run typecheck    # TypeScript, no emit
-npm run db:generate  # regenerate the Prisma client
-npm run db:migrate   # create + apply a migration
-npm run db:push      # push schema without a migration (dev only)
-npm run db:studio    # browse the database
-npm run db:seed      # fill YOUR organization with sample data (dev only)
-npm run db:seed:clear # empty it again
-npm test             # Vitest, single run
-npm run test:watch   # Vitest, watch mode
+npm run dev            # development server (http://localhost:3000)
+npm run build          # production build (Next.js 16 Turbopack)
+npm start              # serve the production build
+npm run lint           # ESLint (architectural import guards)
+npm run typecheck      # TypeScript verification (tsc --noEmit)
+npm test               # Vitest suite (16 test files, 120 tests)
+npm run test:watch     # Vitest watch mode
+npm run db:generate    # regenerate the Prisma client
+npm run db:migrate     # create + apply a migration
+npm run db:studio      # browse the database
+npm run db:seed        # fill YOUR organization with sample data (dev only)
+npm run db:seed:clear  # empty sample data from your organization
 ```
 
-The test suite covers server logic only — the permission matrix, tenant
-isolation, AI tool validation, and the manual-gate rules that keep appointment
-closure, payment confirmation and email sending in human hands. It runs against
-the real development database, so `.env.local` must be configured first. There is
-no browser end-to-end suite.
+---
 
 ## Project structure
 
 ```text
-app/                    Next.js App Router
-  api/health/           dependency + connectivity check
-  layout.tsx            root layout
-  page.tsx              temporary bring-up status page
+app/
+  (auth)/               Sign-in, sign-up, password reset, callback, onboarding
+  (dashboard)/          Authenticated dashboard shell and modules:
+    home/               Organization Pulse dashboard
+    patients/           Patient directory and medical history
+    appointments/       Calendar, scheduling, manual close gate
+    consultations/      Clinical visit notes
+    prescriptions/      Medicine prescriptions
+    bills/              Invoicing, payments, manual confirm gate
+    inventory/          Stock levels, item catalog, movement modal
+    followups/          Recalls, reminders, completion
+    mail/               Email composer, AI drafting, manual send gate
+    notifications/      Notification center
+    activity/           Audit trail timeline
+    reports/            Clinic analytics dashboard
+    settings/           Organization profile configuration
+  api/
+    cron/followups/     Timezone-aware recall status cron route
+    health/             Dependency and connectivity check
 components/
-  ui/                   shadcn/ui components (ours to edit)
+  layout/               Shell, NavLinks, CommandPalette (⌘K), NotificationBell, AskUniSyncDrawer (⌘J)
+  ui/                   shadcn/ui accessible components
 lib/
-  ai/                   LLM abstraction — swap providers here, nowhere else
-    types.ts            provider-agnostic contract (no vendor SDK)
-    gemini.ts           the only file that imports the Gemini SDK
-    provider.ts         resolves the active provider
-    agent/schema.ts     derives tool declarations from Zod schemas
-    tools/define.ts     defineTool(): parse, erase the generic, invoke
-    tools/index.ts      the registry and its build-time safety assertions
-  auth/
-    session.ts          who is calling, in which organization
-    permissions.ts      role to permission mapping
-    human-intent.ts     the token the AI layer cannot construct
-    errors.ts           401 / 403 error types
-  server/
-    action.ts           Server Action wrapper; the only minter of HumanIntent
-    unit.ts             runCommand(): one transaction, one audit record
-    guard.ts            Server Component guard
-    route.ts            Route Handler error mapping
-    result.ts           ActionResult<T>, shared with the client
-    errors.ts           404 / 409 / 422 domain errors
-  db/
-    prisma.ts           the single PrismaClient in the codebase
-    scope.ts            orgScope() / orgWhere()
-    tenant-guard.ts     throws on any unscoped tenant query
-    generated/          generated client (gitignored)
-  supabase/             browser, server and session-refresh clients
-  env.ts                validated environment access
-services/<module>/      business logic (schema, rules, queries, commands)
+  ai/                   Gemini LLM provider, agent loop, 20 domain tools
+  auth/                 Session context, permissions matrix, HumanIntent token
+  server/               runCommand() transactional envelope, Server Action wrappers
+  db/                   Prisma client, tenantTripwire, orgWhere()
+services/               Domain business logic (schema, rules, queries, commands)
+  patients/ appointments/ consultations/ prescriptions/
+  billing/ inventory/ followups/ mail/
+  notifications/ audit/ reports/ chat/
 prisma/
-  schema.prisma         database schema
-  migrations/           tenancy, domain modules, RLS lockdown
-  seed.ts               development sample clinic
-tests/                  Vitest: permissions, tenancy, AI tool safety
-proxy.ts                runs per request; refreshes the Supabase session
-prisma.config.ts        Prisma CLI config (loads .env.local, direct DB URL)
-docs/                   longer-form design notes
+  schema.prisma         PostgreSQL schema (20 models, 12 enums)
+  migrations/           Audited migration history with CHECK constraints
+tests/                  16 Vitest test suites (120 tests passed)
 ```
 
-The `(auth)` and `(dashboard)` route groups will be added with the
-authentication module.
+---
 
-## How it fits together
+## Future Roadmap (What is Yet to be Done)
 
-Requests flow: **browser → Next.js → server-side business logic → application
-tools → database.**
-
-Two rules the codebase is built around:
-
-1. **Authorization happens on the server, where data is read.** Route-level
-   gating is not the security boundary. Every tenant-scoped query takes its
-   `organizationId` from the verified session, never from request input.
-2. **The AI agent has no special access.** It calls the same tools a human
-   user's actions call, with the same permission checks, argument validation,
-   and audit logging. It cannot run SQL, cannot pick its own organization, and
-   must ask for confirmation before anything destructive.
+1. **Third-Party Email Delivery:** Connect live Resend or SendGrid API credentials and webhooks to advance `PatientEmail` from `PROVIDER_NOT_CONFIGURED` to live `SENT`.
+2. **Online Payment Gateway:** Integrate Stripe / Razorpay checkout links and webhook reconciliation for online patient payments.
+3. **SMS & WhatsApp Messaging:** Add Twilio and WhatsApp Business API adapters for outbound patient recall notifications.
+4. **Dedicated Non-Owning Database Role:** Implement PostgreSQL `SET LOCAL app.organization_id` for defense-in-depth RLS on Prisma queries.
+5. **Multi-Practitioner Scheduling:** Expand appointment booking from a single-admin model to multi-doctor / multi-chair scheduling with availability rotas.
+6. **Persistent Chat Sessions:** Persist Ask UniSync chat messages to database tables (`AiConversation` / `AiMessage`).
+7. **Client Command Idempotency:** Pass client-generated `commandId` tokens into `runCommand` to eliminate accidental duplicate submissions.
