@@ -1,6 +1,10 @@
 import Link from "next/link";
 
 import { Logo } from "@/components/brand/logo";
+import {
+  StartingAnimationOverlay,
+  ReplayIntroButton,
+} from "@/components/brand/starting-animation";
 
 /**
  * Layout for the unauthenticated routes.
@@ -12,22 +16,28 @@ import { Logo } from "@/components/brand/logo";
  */
 export default function AuthLayout({ children }: LayoutProps<"/">) {
   return (
-    <div className="flex min-h-svh flex-1 flex-col lg:grid lg:grid-cols-[1fr_minmax(0,28rem)]">
-      <div className="flex flex-1 flex-col px-6 py-8 sm:px-10">
-        <header>
-          <Link href="/" className="inline-flex rounded-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
-            <Logo />
-          </Link>
-        </header>
+    <>
+      <StartingAnimationOverlay />
+      <div className="flex min-h-svh flex-1 flex-col lg:grid lg:grid-cols-[1fr_minmax(0,28rem)]">
+        <div className="flex flex-1 flex-col px-6 py-8 sm:px-10">
+          <header>
+            <Link
+              href="/"
+              className="inline-flex rounded-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              <Logo />
+            </Link>
+          </header>
 
-        <main className="flex flex-1 items-center justify-center py-10">
-          <div className="w-full max-w-sm">{children}</div>
-        </main>
+          <main className="flex flex-1 items-center justify-center py-10">
+            <div className="w-full max-w-sm">{children}</div>
+          </main>
 
-        <footer className="text-muted-foreground text-xs">
-          &copy; {new Date().getFullYear()} UniSync
-        </footer>
-      </div>
+          <footer className="text-muted-foreground text-xs flex items-center justify-between">
+            <span>&copy; {new Date().getFullYear()} UniSync</span>
+            <ReplayIntroButton />
+          </footer>
+        </div>
 
       {/* Decorative: hidden from assistive tech and from small screens. */}
       <aside
@@ -62,5 +72,8 @@ export default function AuthLayout({ children }: LayoutProps<"/">) {
         </div>
       </aside>
     </div>
+  </>
   );
 }
+
+
