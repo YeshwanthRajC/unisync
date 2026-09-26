@@ -72,7 +72,7 @@ const databaseEnvSchema = z.object({
 
 const aiEnvSchema = z.object({
   GEMINI_API_KEY: nonEmpty,
-  GEMINI_MODEL: z.string().trim().min(1).default("gemini-3.8-flash"),
+  GEMINI_MODEL: z.string().trim().min(1).default("gemini-3.6-flash"),
 });
 
 const brevoEnvSchema = z.object({
@@ -127,7 +127,7 @@ function assertServer(accessor: string): void {
   if (typeof window !== "undefined") {
     throw new Error(
       `${accessor}() was called in the browser. Server secrets must never be ` +
-        "imported into a Client Component.",
+      "imported into a Client Component.",
     );
   }
 }
@@ -180,6 +180,6 @@ function parseOrThrow<T extends z.ZodType>(
 
   throw new Error(
     `Invalid or missing ${scope} environment variables: ${missing.join(", ")}. ` +
-      "Copy .env.example to .env.local and fill in the values.",
+    "Copy .env.example to .env.local and fill in the values.",
   );
 }
