@@ -15,41 +15,43 @@
 
 ---
 
-## 📖 Overview
+## 👋 Welcome to UniSync
 
-UniSync is designed as a centralized administrative hub. The first version is optimized for a **dental clinic**, but the robust multi-tenant architecture and organization-aware data model mean it can scale to support any service-based clinic or small business.
+Hi there! I built **UniSync** because I wanted to create a truly modern, centralized administrative hub that takes the friction out of running a clinic. Originally optimized for a **dental clinic**, I designed it with a robust multi-tenant architecture so it can easily scale to support any service-based clinic or small business.
 
-With **14 foundational modules**, **38 App Router routes**, and **120 Vitest unit/integration tests**, UniSync is built for production reliability.
+I wanted this platform to feel like you have an extra staff member working alongside you, which is why I integrated a proactive AI Assistant right into the core workflow. Instead of just another CRM, UniSync is a complete ecosystem that handles everything from the moment a patient books an appointment to their final bill and follow-up.
 
-> For deeper engineering context—including architecture, data models, AI safety boundaries, and design decisions—see [`CLAUDE.md`](./CLAUDE.md) and [`docs/handoff.md`](./docs/handoff.md).
-
----
-
-## ✨ Key Features
-
-- 👥 **Patients & Medical Records:** Comprehensive CRM to register, search, archive, and manage clinical history, with automated age calculations.
-- 📅 **Appointments & Timezone Calendar:** Full scheduling workflow (schedule, confirm, start, cancel, mark no-show) with day calendar and timezone awareness.
-- 🩺 **Consultations & Prescriptions:** Record clinical findings natively attached to appointments. Issue immutable, multi-item prescriptions with dosage rules.
-- 💳 **Billing & Invoicing:** Generate dynamic invoices with auto-calculated totals. Record payments, issue refunds, and manage unconfirmed voidable bills.
-- 📦 **Inventory & Stock Ledger:** Track consumable supplies with reorder thresholds. All stock movements (`PURCHASE`, `USAGE`, `ADJUSTMENT`) update an immutable balance ledger.
-- ✉️ **Patient Mail & AI Drafting:** Built-in email composer powered by Gemini AI to draft context-aware emails to patients (with live preview).
-- 🔄 **Reminders & Follow-ups:** Automate recall dates and follow-ups with notes, driven by a timezone-aware background cron job (`/api/cron/followups`).
-- 🤖 **Ask UniSync (AI Assistant):** A slide-over assistant (`⌘J` / `Ctrl+J`) powered by Google Gemini. It utilizes 20 domain-specific tools with read/write confirmation flows and complete audit logging.
-- 🔍 **Global Command Palette:** Instant modal search (`⌘K` / `Ctrl+K`) for rapid navigation and executing quick actions across the platform.
-- 📊 **Activity Log & Reports:** Full audit trail filtering by actor (`USER`, `AI_AGENT`, `SYSTEM`); rich analytics for revenue, appointments, inventory, and recalls.
-- ⚙️ **Clinic Settings & Safe Onboarding:** Manage clinic profiles, timezone, and currency. Includes a safe cancellation and full account reversion flow.
+With **14 foundational modules**, I've made sure UniSync is built for production reliability.
 
 ---
 
-## 🛡️ The Three Manual Gates (AI Safety)
+## ✨ What I've Built (Key Features)
 
-To guarantee clinical and financial safety, three high-risk actions are strictly cordoned off from the AI agent or automated scripts. They **must** be executed by a human:
+Here is a human-friendly breakdown of what you can do with this platform:
+
+- 👥 **Manage Patients Effortlessly:** I've built a comprehensive CRM where you can register patients, search through their medical history, and automatically calculate ages without doing the math yourself.
+- 📅 **Stay on Top of the Calendar:** The scheduling system handles the entire lifecycle of an appointment (schedule, confirm, start, cancel, or mark no-show). Plus, it's fully timezone-aware, so you don't have to worry about mixed-up times.
+- 🩺 **Track Consultations & Prescriptions:** During a visit, you can record clinical findings directly on the appointment. I also added a prescription generator that creates immutable, multi-item prescriptions with specific dosage rules.
+- 💳 **Handle Billing with Confidence:** You can generate dynamic invoices that auto-calculate totals, record partial or full payments, issue refunds, and void unconfirmed bills if a mistake is made.
+- 📦 **Never Run Out of Supplies:** The inventory ledger tracks all your consumable supplies. Whether it's a purchase, a usage, or an adjustment, every stock movement updates an immutable balance ledger and alerts you when stocks fall below reorder thresholds.
+- ✉️ **Draft Emails with AI:** Instead of writing follow-up emails from scratch, the built-in Gemini AI looks at the context of the visit and drafts personalized emails to patients for you. You just review and hit send!
+- 🔄 **Automate Follow-ups:** I set up a background job that automatically tracks recall dates and generates follow-up tasks so no patient falls through the cracks.
+- 🤖 **Ask UniSync (AI Assistant):** Need help? Press `⌘J` (or `Ctrl+J`) to slide out my AI assistant. It utilizes 20 domain-specific tools to read data and suggest actions.
+- 🔍 **Global Command Palette:** Need to jump to a page fast? Press `⌘K` (or `Ctrl+K`) for instant modal search and rapid navigation.
+- 📊 **Activity Log & Reports:** I included a full audit trail that tracks who did what (User, AI, or System) and rich analytics for revenue, appointments, inventory, and recalls.
+- ⚙️ **Clinic Settings & Safe Onboarding:** Manage clinic profiles, timezone, and currency easily, complete with a safe cancellation and full account reversion flow.
+
+---
+
+## 🛡️ The Three Manual Gates (My Approach to AI Safety)
+
+To guarantee clinical and financial safety, I strictly cordoned off three high-risk actions from the AI agent or automated scripts. They **must** be executed by a human:
 
 1. 🩺 **`closeAppointment`** — Requires a human clinician to finalize clinical outcomes.
 2. 💰 **`confirmPayment`** — Confirming a financial payment requires human validation.
 3. 📨 **`sendPatientEmail`** — Dispatching communication to a real patient requires human review.
 
-**These gates are enforced via a 4-layer defense:**
+**I enforced these gates via a 4-layer defense:**
 - PostgreSQL `CHECK` constraints on the database level.
 - Type-safe `HumanIntent` tokens minted exclusively by authorized Server Actions.
 - Custom ESLint rules that block AI tools from importing `HumanIntent` or the Prisma client directly.
